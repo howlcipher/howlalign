@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from types import MappingProxyType
+from typing import Mapping
 
 # Versioning & Schemas
 DEFAULT_POLICY_VERSION = "0.1.0"
@@ -63,18 +64,38 @@ DEFAULT_MODELS = MappingProxyType(
 )
 
 
-def get_default_backup_root(home_dir: Path | None = None) -> Path:
-    """Resolve user-private XDG state directory for backups outside repositories."""
-    env_override = os.environ.get("HOWLALIGN_BACKUP_DIR")
-    if env_override:
-        return Path(env_override).resolve()
+def get_default_backup_root(
+    home_dir: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> Path:
+    """Resolve user-private XDG state directory for backups outside repositories.
 
-    if home_dir is not None:
-        return home_dir / ".local" / "state" / "howlalign" / "backups"
+    Precedence order:
+    1. HOWLALIGN_BACKUP_DIR: explicit environment override, when set and non-empty.
+    2. XDG_STATE_HOME / howlalign / backups: standard XDG user state location, when set and non-empty.
+       If relative, it is resolved against the effective home directory.
+    3. <effective_home> / .local / state / howlalign / backups: XDG specification default.
+    """
+    environ = os.environ if env is None else env
+    effective_home = home_dir.resolve() if home_dir is not None else Path.home().resolve()
 
-    xdg_state = os.environ.get("XDG_STATE_HOME")
-    if xdg_state:
-        return Path(xdg_state).resolve() / "howlalign" / "backups"
+    # 1. Explicit HOWLALIGN_BACKUP_DIR override
+    env_override = environ.get("HOWLALIGN_BACKUP_DIR")
+    if env_override and env_override.strip():
+        try:
+            return Path(env_override.strip()).resolve()
+        except Exception:
+            pass
 
-    home = Path.home()
-    return home / ".local" / "state" / "howlalign" / "backups"
+    # 2. Applicable XDG_STATE_HOME
+    xdg_state = environ.get("XDG_STATE_HOME")
+    if xdg_state and xdg_state.strip():
+        try:
+            p = Path(xdg_state.strip())
+            resolved_state = p.resolve() if p.is_absolute() else (effective_home / p).resolve()
+            return resolved_state / "howlalign" / "backups"
+        except Exception:
+            pass
+
+    # 3. Default state directory under effective home
+    return effective_home / ".local" / "state" / "howlalign" / "backups"

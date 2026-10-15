@@ -32,10 +32,11 @@ ruff check --fix .
 
 When developing HowlAlign, **never modify real user AI configuration files**.
 
-All tests must run against isolated fixtures:
-- Use pytest's `tmp_path` fixture for filesystem operations.
-- Explicitly pass `home_dir` and `workspace_dir` to `ProviderDiscovery`, `AlignmentEngine`, `Doctor`, and `ConfigWriter`.
-- Use `CliRunner.isolated_filesystem()` for testing CLI commands.
+All tests run under hermetic isolation:
+- An autouse fixture in `tests/conftest.py` sets disposable `HOME`, `XDG_STATE_HOME`, and `HOWLALIGN_BACKUP_DIR` pointing to temporary paths for every test run, guaranteeing zero host configuration or state contamination.
+- Filesystem operations use pytest's `tmp_path` fixture.
+- Components (`ProviderDiscovery`, `AlignmentEngine`, `Doctor`, `ConfigWriter`) accept `home_dir`, `workspace_dir`, and `env` parameters for hermetic dependency injection.
+- CLI commands are invoked with `CliRunner.isolated_filesystem()`.
 
 ## 4. Adding a New Provider Adapter
 

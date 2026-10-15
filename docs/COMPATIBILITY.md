@@ -1,6 +1,6 @@
 # Provider Compatibility Matrix
 
-This document provides a comprehensive capability classification, evaluated versions, runtime validation status, and known behavioral constraints for AI coding assistant providers supported by HowlAlign v0.1.3.
+This document provides a comprehensive capability classification, evaluated versions, runtime validation status, and known behavioral constraints for AI coding assistant providers supported by HowlAlign v0.1.4.
 
 ---
 
@@ -83,10 +83,12 @@ Each native capability is classified under one of four rigorous standards:
 
 | Capability | Status | Notes |
 | :--- | :--- | :--- |
+| Model discovery (`agy models`) | **Runtime Verified** | Discovers active models directly from CLI registry (`discover_agy_models()`). |
 | Model selection (`gemini-3.8-flash-*`, `claude-*`) | **Runtime Verified** | Verified active model registry via `agy models`. |
 | Thinking effort levels (`effort` / `--effort`) | **Runtime Verified** | Validated via `settings.json` (`low`, `medium`, `high`, `xhigh`, `max`). |
-| Progressive skills (`.agents/skills/<name>/SKILL.md`) | **Runtime Verified** | YAML frontmatter (`name`, `description`) + markdown instructions. |
-| Custom subagents (`.agents/agents/<name>/agent.md`) | **Runtime Verified** | YAML frontmatter (`subagent: true`, `model`, `tools`) + instructions. |
+| Progressive skills (`.agents/skills/<name>/SKILL.md`) | **Runtime Verified** | YAML frontmatter (`name`, `description`) + markdown instructions. Validated via `check_health()`. |
+| Custom subagents (`.agents/agents/<name>/agent.md`) | **Runtime Verified** | YAML frontmatter (`subagent: true`, `model`, `tools`) + instructions. Validated via `check_health()`. |
+| Workspace directory discovery | **Runtime Verified** | Discovers `.agents/skills` and `.agents/agents` in workspace root. |
 | Execution modes (`accept-edits`, `auto`, `plan`) | **Schema / Doc Verified** | Supported via runtime CLI flags and settings. |
 | Rule file size cap (24 KB per file) | **Runtime Verified** | Files over 24,000 bytes are truncated by AGY CLI; enforced by `howlalign doctor`. |
 | Aggregate rules token budget (20,000 tokens) | **Schema / Doc Verified** | Excess rules demoted to file references. |
@@ -94,11 +96,15 @@ Each native capability is classified under one of four rigorous standards:
 
 ---
 
-## Summary of Unsupported Setting Removals in v0.1.3
+## Summary of Unsupported Setting Removals & Hardening in v0.1.3 & v0.1.4
 
 1. **Codex CLI `default_subagent_*` keys in `config.toml`**:
    Removed from `src/howlalign/adapters/codex.py`. Codex CLI 0.162.1 config parser emits strict configuration warnings for `default_subagent_model` and `default_subagent_reasoning_effort`. Subagent models and reasoning efforts are set within each specific `.codex/agents/<name>.toml`.
 2. **Codex CLI `managed_by` key in agent role TOML data tables**:
-   Codex deserializes agent role files directly into an internal Rust struct with `deny_unknown_fields`. Emitting `managed_by = "howlalign"` inside the TOML data table caused Codex to log `Ignoring malformed agent role definition: failed to deserialize agent role file ... unknown field managed_by`. HowlAlign v0.1.3 formats the provenance and fingerprint metadata as top-level comments (`# managed_by = "howlalign"`, `# howlalign: fingerprint = ...`).
+   Codex deserializes agent role files directly into an internal Rust struct with `deny_unknown_fields`. Emitting `managed_by = "howlalign"` inside the TOML data table caused Codex to log `Ignoring malformed agent role definition: failed to deserialize agent role file ... unknown field managed_by`. HowlAlign formats provenance and fingerprint metadata as top-level comments (`# managed_by = "howlalign"`, `# howlalign: fingerprint = ...`).
 3. **AGY `planningModel` in `settings.json`**:
    AGY only parses `"model"` and `"effort"` from `settings.json`.
+4. **AGY Model Discovery and Frontmatter Validation in v0.1.4**:
+   `howlalign.core.discovery.discover_agy_models()` actively queries the live AGY model registry. `AgyAdapter.check_health()` validates frontmatter structure and mandatory fields (`name`, `description`, `model`) for all workspace skills and agents.
+5. **Whitespace Preservation in Managed-File Provenance in v0.1.4**:
+   `compute_managed_fingerprint()` hashes exact canonical document bytes (excluding self-referential header tags), preventing invisible whitespace or indentation alterations. Legacy files are migrated with strict whitespace anomaly checks.

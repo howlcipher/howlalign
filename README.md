@@ -116,14 +116,14 @@ HowlAlign operates under strict configuration safety rules:
 - **Target Drift Detection:** Restore operations refuse to overwrite target files that have drifted or been deleted after apply unless `--force` is specified.
 - **Cross-Mount Authorization:** Requires explicit `--workspace` / `-w` authorization to restore files outside the current working tree, preventing path-traversal attacks via malicious manifests.
 - **Truthful Rollback Reporting:** Accurately reports rollback outcomes (`SUCCEEDED`, `PARTIAL`, `FAILED`) and tracks un-reverted files rather than claiming success unconditionally.
-- **User Provenance Protection & Canonical Fingerprinting:** Tags managed files with cryptographic fingerprints (`# howlalign: fingerprint = ...` or YAML `fingerprint: ...`) computed via a unified contract; provides backward-compatible detection for legacy v0.1.2 files, cleanly detecting human customizations and protecting them from overwrite.
+- **User Provenance Protection & Canonical Fingerprinting:** Tags managed files with cryptographic fingerprints (`# howlalign: fingerprint = ...` or YAML `fingerprint: ...`) computed via a unified whitespace-preserving canonical contract; detects indentation, blank line, and trailing space alterations. Provides safe, conservative migration for legacy v0.1.2 and v0.1.3 files, verifying hash and whitespace integrity before allowing updates and failing closed on ambiguity.
 - **Fail-Closed Configuration & Policy Safety:** Halts with explicit domain exceptions (`ConfigurationParseError`, `PolicyValidationError`) rather than resetting or corrupting malformed configurations.
-- **Dedicated Private Backups:** Backups are stored in user-private XDG state locations with restrictive permissions (`0o700` directories, `0o600` files), preventing accidental git commits.
+- **Dedicated Private Backups & XDG Precedence:** Backups are stored in user-private state locations following strict precedence (`$HOWLALIGN_BACKUP_DIR` -> `$XDG_STATE_HOME/howlalign/backups/` -> `~/.local/state/howlalign/backups/`) with restrictive permissions (`0o700` directories, `0o600` files), preventing accidental git commits and cross-user leaks.
 - **Atomic Operations & Permission Preservation:** Writes target configurations through atomic temporary replacements, preserving file modes on existing configurations.
 - **Secret Isolation & Masking:** Sensitive credentials, private keys, tokens, and authorization headers are masked in all diff previews and diagnostics without double-redaction or leaking prefixes.
 - **Zero Unrelated Overwrite:** Preserves existing unrelated settings and tables in JSON and TOML configuration files.
 - **No Silent Permission Bypasses:** Never enables `--dangerously-skip-permissions` or unrestricted sandbox bypasses without explicit user policy intent.
-- **Isolated Testing:** Integration and unit tests run in hermetic, disposable fixture directories.
+- **Hermetic Testing & Deployment Runbook:** Test suites run under hermetic fixtures isolating all environment variables and filesystem operations. Controlled evaluation on real developer machines is guided by [`docs/DEPLOYMENT_RUNBOOK.md`](file:///run/media/system/tallgeese/dev/howlalign/docs/DEPLOYMENT_RUNBOOK.md).
 
 ---
 

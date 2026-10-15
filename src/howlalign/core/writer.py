@@ -10,7 +10,7 @@ import shutil
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from howlalign import __version__
 from howlalign.core.constants import (
@@ -84,15 +84,21 @@ class ConfigWriter:
         home_dir: Path | None = None,
         backup_root: Path | None = None,
         authorized_roots: list[Path] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self.workspace = (workspace_dir or Path.cwd()).resolve()
         self.home = (home_dir or Path.home()).resolve()
+        self.env = env
         self.allowed_roots = (
             [r.resolve() for r in authorized_roots]
             if authorized_roots is not None
             else [self.workspace, self.home]
         )
-        self.backup_root = backup_root or get_default_backup_root(self.home)
+        self.backup_root = (
+            backup_root.resolve()
+            if backup_root is not None
+            else get_default_backup_root(home_dir=self.home, env=self.env)
+        )
 
     def _get_workspace_backup_dir(self) -> Path:
         """Derive an isolated, user-private backup directory for this workspace."""

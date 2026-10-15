@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Mapping
 
 import click
 
@@ -35,11 +36,15 @@ class AlignmentEngine:
         workspace_dir: Path | None = None,
         home_dir: Path | None = None,
         scope: Scope = Scope.PROJECT,
+        backup_root: Path | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self.workspace = (workspace_dir or Path.cwd()).resolve()
         self.home = (home_dir or Path.home()).resolve()
         self.scope = scope
         self.is_global = scope == Scope.GLOBAL
+        self.env = env
+        self.backup_root = backup_root
 
         # Locate policy
         resolved_policy_path = discover_policy_file(config_path)
@@ -51,7 +56,12 @@ class AlignmentEngine:
             self.policy = get_default_policy()
 
         self.discovery = ProviderDiscovery(home_dir=self.home, workspace_dir=self.workspace)
-        self.writer = ConfigWriter(workspace_dir=self.workspace, home_dir=self.home)
+        self.writer = ConfigWriter(
+            workspace_dir=self.workspace,
+            home_dir=self.home,
+            backup_root=self.backup_root,
+            env=self.env,
+        )
 
         self.adapters: dict[ProviderType, BaseAdapter] = {
             ProviderType.CLAUDE: ClaudeAdapter(workspace_dir=self.workspace, home_dir=self.home),

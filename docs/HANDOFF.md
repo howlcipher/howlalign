@@ -8,52 +8,51 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
 
 ---
 
-## Milestone Status: v0.1.3 Managed-File Correctness & Real Provider Validation Verified
+## Milestone Status: v0.1.4 Final Correctness, Native Compatibility & Deployment Readiness Verified
 - **Repository**: `https://github.com/howlcipher/howlalign`
 - **Local Path**: `/run/media/system/tallgeese/dev/howlalign`
 - **Current Branch**: `main`
-- **Version**: `0.1.3` (bumped in `pyproject.toml`, `src/howlalign/__init__.py`, and `src/howlalign/core/writer.py`)
-- **Verification Status**: 65/65 unit and integration tests passing; ruff format and lint clean; package build clean.
-- **Critical Isolation**: Zero real user AI assistant configurations (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.config/howlalign`) modified. All tests run in isolated `tmp_path` disposable environments.
+- **Version**: `0.1.4` (bumped in `pyproject.toml`, `src/howlalign/__init__.py`, and `src/howlalign/core/writer.py`)
+- **Verification Status**: 89/89 unit and integration tests passing; ruff format and lint clean; package build clean.
+- **Critical Isolation**: Zero real user AI assistant configurations (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.config/howlalign`) modified. All tests run in isolated `tmp_path` disposable environments with hermetic test environment fixtures (`conftest.py`).
 
 ---
 
-## v0.1.3 Deliverables & Verifications
+## v0.1.4 Deliverables & Verifications
 
-1. **Canonical Managed-File Fingerprint Contract**:
-   - Implemented `embed_managed_fingerprint()` in `src/howlalign/adapters/base.py` providing a single authoritative embedding mechanism across Markdown and TOML.
-   - Fixed the root cause of the v0.1.2 fingerprint defect where partial body hashing caused untouched files to immediately fail fingerprint verification.
-   - Refactored `src/howlalign/adapters/claude.py`, `src/howlalign/adapters/codex.py`, and `src/howlalign/adapters/agy.py` to use the unified contract.
+1. **Whitespace-Preserving Canonical Document Fingerprinting**:
+   - Eliminated line-stripping in `compute_managed_fingerprint()` (`src/howlalign/adapters/base.py`).
+   - Normalizes line endings (`\r\n` -> `\n`) while preserving exact leading indentation, trailing spaces, blank lines, and line ordering.
+   - Accurately strips only the designated self-referential header fingerprint comment within document header (`idx < 30`).
+   - Detects all semantic and formatting changes across YAML frontmatter, Markdown, and TOML formats.
 
-2. **Conservative Backward-Compatible Migration for v0.1.2 Files**:
-   - Implemented `_matches_legacy_v012_fingerprint()` in `src/howlalign/adapters/base.py`.
-   - Correctly identifies untouched v0.1.2 generated files and upgrades them to canonical v0.1.3 fingerprints upon policy change.
-   - Fails closed on any human modifications or corrupted fingerprints, protecting user-authored changes from silent overwrites.
+2. **Conservative Multi-Version Migration**:
+   - Implemented conservative migration in `has_user_modifications()` covering v0.1.4, legacy v0.1.3, and legacy v0.1.2 formats.
+   - Detects whitespace tampering in legacy v0.1.3 files via `has_whitespace_modifications()`.
+   - Untouched legacy files with clean whitespace are safely upgraded to v0.1.4 on apply.
+   - Fails closed on any modified, tampered, or missing fingerprints, protecting human customizations from silent overwrite.
 
-3. **Real Native Provider Compatibility Validation**:
-   - **Claude Code (v2.1.301)**: Verified CLI `claude doctor`, validated settings structure (`opusplan` model routing, `effortLevel`, subagents in `.claude/agents/*.md`).
-   - **Codex CLI (v0.162.1)**:
-     - Identified and removed unsupported `default_subagent_model` and `default_subagent_reasoning_effort` from `config.toml`, which caused `--strict-config` warnings.
-     - Identified that Codex CLI's TOML deserializer rejects unknown fields on agent structs (`unknown field managed_by`). Moved provenance marker to top comment `# managed_by = "howlalign"`.
-     - Verified `codex --strict-config doctor` runs cleanly with zero warnings or errors.
-     - Documented project trust model requirement (`[projects."<abs_path>"] trust_level = "trusted"`).
-   - **AGY CLI (v1.3.6)**:
-     - Verified model identifiers via `agy models` (`gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`).
-     - Verified skills (`.agents/skills/<name>/SKILL.md`), subagents (`.agents/agents/<name>/agent.md`), and rule budgets (24 KB file limit).
+3. **AGY CLI Compatibility & Validation Hardening**:
+   - Implemented `discover_agy_models()` in `src/howlalign/core/discovery.py` to query the live `agy models` CLI registry and strip terminal control sequences.
+   - Enhanced `discover_agy()` to discover `.agents/skills` and `.agents/agents` workspace directories.
+   - Added `"effort"` generation to global AGY `settings.json` from implementation role.
+   - Implemented YAML frontmatter validation (`name`, `description`, `model`) in `AgyAdapter.check_health()`.
 
-4. **Complete Alignment Lifecycle Testing**:
-   - Validated full lifecycle in `tests/test_v013_managed_files.py` across both project and global scopes:
-     - `init` -> `check` -> `diff` -> `apply` -> `check after apply` (clean no-op) -> repeated `apply` (idempotent 0 changes).
-     - Policy modification updates untouched managed files smoothly.
-     - Manual user edits are detected and preserved with conflict status and exit code 1.
-     - Drift detection blocks accidental overwrites unless `--force` is used.
-     - Backup and restore preserve file permissions and directory isolation.
-     - Diagnostics (`doctor`) inspect healthy and obsolete configurations accurately.
+4. **XDG State Home Precedence & Hermetic Isolation**:
+   - Implemented `get_default_backup_root()` in `src/howlalign/core/constants.py` enforcing strict precedence:
+     1. `$HOWLALIGN_BACKUP_DIR`
+     2. `$XDG_STATE_HOME/howlalign/backups/`
+     3. `<effective_home>/.local/state/howlalign/backups/`
+   - Added `tests/conftest.py` with an autouse hermetic fixture setting disposable `HOME`, `XDG_STATE_HOME`, and `HOWLALIGN_BACKUP_DIR`, completely isolating developer host state from test runs.
+
+5. **Deployment Runbook**:
+   - Authored comprehensive 10-step operator runbook in `docs/DEPLOYMENT_RUNBOOK.md` detailing non-destructive verification, safe backup verification, and rollback procedures.
 
 ---
 
 ## Test & Quality Verification Results
-- **Pytest**: `65 passed in 6.21s` across 9 test modules:
+- **Pytest**: `89 passed in 6.14s` across 10 test modules:
+  - `tests/test_v014_correctness.py` (24 tests)
   - `tests/test_v013_managed_files.py` (13 tests)
   - `tests/test_v012_remediation.py` (14 tests)
   - `tests/test_adapters.py` (10 tests)
@@ -64,8 +63,8 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
   - `tests/test_policy.py` (4 tests)
   - `tests/test_writer.py` (4 tests)
 - **Ruff Lint**: `ruff check .` -> `All checks passed!`
-- **Ruff Format**: `ruff format --check .` -> `29 files already formatted`
-- **Package Build**: `python -m build` -> successfully built wheel and sdist for `howlalign-0.1.3`.
+- **Ruff Format**: `ruff format --check .` -> `31 files already formatted`
+- **Package Build**: `uv build` -> successfully built wheel and sdist for `howlalign-0.1.4`.
 
 ---
 
@@ -74,3 +73,4 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
 - v0.1.1: Security hardening, private backups, fail-closed parsing, and rule budget enforcement.
 - v0.1.2: Independent audit remediation, backup integrity verification, truthful rollback reporting, provenance fingerprinting, and AGY settings compatibility.
 - v0.1.3: Canonical managed-file fingerprint contract, v0.1.2 conservative migration, real native CLI compatibility validation, and full lifecycle verification.
+- v0.1.4: Whitespace-preserving fingerprint contract, multi-version migration hierarchy, AGY validation hardening & model discovery, XDG backup precedence, and deployment runbook.

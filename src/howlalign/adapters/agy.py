@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from howlalign.adapters.base import (
     BaseAdapter,
     embed_managed_fingerprint,
@@ -60,6 +62,7 @@ class AgyAdapter(BaseAdapter):
         impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
         if impl_role:
             data["model"] = impl_role.agy_model
+            data["effort"] = impl_role.effort.value
 
         # Permissions mode
         if policy.permissions.ask_approval == ApprovalPolicy.NEVER:
@@ -75,6 +78,8 @@ class AgyAdapter(BaseAdapter):
             data["mode"] = agy_overrides["mode"]
         if "toolPermission" in agy_overrides:
             data["toolPermission"] = agy_overrides["toolPermission"]
+        if "effort" in agy_overrides:
+            data["effort"] = agy_overrides["effort"]
 
         return json.dumps(data, indent=2) + "\n"
 
@@ -390,5 +395,83 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
                         action="Demote secondary rules to on-demand skills.",
                     )
                 )
+
+            # Validate workspace skills and agents schema
+            agents_root = self._get_workspace_agents_dir()
+            skills_dir = agents_root / "skills"
+            if skills_dir.is_dir():
+                for skill_folder in skills_dir.iterdir():
+                    if not skill_folder.is_dir():
+                        continue
+                    skill_md = skill_folder / "SKILL.md"
+                    if skill_md.is_file():
+                        text = safe_read_text(skill_md)
+                        if text and text.startswith("---"):
+                            parts = text.split("---", 2)
+                            if len(parts) >= 3:
+                                try:
+                                    fm = yaml.safe_load(parts[1])
+                                    if (
+                                        not isinstance(fm, dict)
+                                        or not fm.get("name")
+                                        or not fm.get("description")
+                                    ):
+                                        items.append(
+                                            DiagnosticItem(
+                                                severity="ERROR",
+                                                category="CONFIGURATION",
+                                                message=f"AGY skill '{skill_folder.name}' SKILL.md frontmatter is missing required 'name' or 'description'.",
+                                                provider="agy",
+                                                action="Update SKILL.md frontmatter to include valid name and description.",
+                                            )
+                                        )
+                                except Exception as err:
+                                    items.append(
+                                        DiagnosticItem(
+                                            severity="ERROR",
+                                            category="CONFIGURATION",
+                                            message=f"AGY skill '{skill_folder.name}' SKILL.md frontmatter is invalid YAML: {err}",
+                                            provider="agy",
+                                            action="Correct YAML syntax in SKILL.md frontmatter.",
+                                        )
+                                    )
+
+            custom_agents_dir = agents_root / "agents"
+            if custom_agents_dir.is_dir():
+                for agent_folder in custom_agents_dir.iterdir():
+                    if not agent_folder.is_dir():
+                        continue
+                    agent_md = agent_folder / "agent.md"
+                    if agent_md.is_file():
+                        text = safe_read_text(agent_md)
+                        if text and text.startswith("---"):
+                            parts = text.split("---", 2)
+                            if len(parts) >= 3:
+                                try:
+                                    fm = yaml.safe_load(parts[1])
+                                    if (
+                                        not isinstance(fm, dict)
+                                        or not fm.get("name")
+                                        or not fm.get("model")
+                                    ):
+                                        items.append(
+                                            DiagnosticItem(
+                                                severity="ERROR",
+                                                category="CONFIGURATION",
+                                                message=f"AGY custom agent '{agent_folder.name}' agent.md frontmatter is missing required 'name' or 'model'.",
+                                                provider="agy",
+                                                action="Update agent.md frontmatter to include valid name and model.",
+                                            )
+                                        )
+                                except Exception as err:
+                                    items.append(
+                                        DiagnosticItem(
+                                            severity="ERROR",
+                                            category="CONFIGURATION",
+                                            message=f"AGY custom agent '{agent_folder.name}' agent.md frontmatter is invalid YAML: {err}",
+                                            provider="agy",
+                                            action="Correct YAML syntax in agent.md frontmatter.",
+                                        )
+                                    )
 
         return items

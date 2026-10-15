@@ -35,6 +35,33 @@ def extract_version_semver(text: str | None) -> str | None:
     return match.group(1) if match else text.split()[0] if text else None
 
 
+def discover_agy_models(binary_path: str = "agy") -> list[str]:
+    """Discover available AGY model identifiers via 'agy models'."""
+    try:
+        proc = subprocess.run(
+            [binary_path, "models"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return []
+        models: list[str] = []
+        for line in proc.stdout.splitlines():
+            clean_line = re.sub(r"^[^\w\s]*", "", line).strip()
+            parts = clean_line.split()
+            if (
+                parts
+                and re.match(r"^[a-zA-Z0-9.-]+$", parts[0])
+                and not parts[0].startswith("Fetching")
+            ):
+                models.append(parts[0])
+        return models
+    except Exception:
+        return []
+
+
 class ProviderDiscovery:
     """Detects installed AI coding assistants and resolves capabilities."""
 
@@ -130,12 +157,18 @@ class ProviderDiscovery:
         global_cfg = self.home / ".gemini" / "antigravity-cli" / "settings.json"
         project_cfg = self.workspace / ".agents" / "skills.json"
         rules_cfg = self.workspace / "GEMINI.md"
+        skills_dir = self.workspace / ".agents" / "skills"
+        agents_dir = self.workspace / ".agents" / "agents"
 
         effective_project = None
         if project_cfg.is_file():
             effective_project = str(project_cfg)
         elif rules_cfg.is_file():
             effective_project = str(rules_cfg)
+        elif skills_dir.is_dir():
+            effective_project = str(skills_dir)
+        elif agents_dir.is_dir():
+            effective_project = str(agents_dir)
 
         capabilities = [
             "workspace_skills_runbooks",
