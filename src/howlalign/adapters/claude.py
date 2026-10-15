@@ -8,7 +8,7 @@ from typing import Any
 
 from howlalign.adapters.base import (
     BaseAdapter,
-    compute_managed_fingerprint,
+    embed_managed_fingerprint,
     has_user_modifications,
     is_file_managed_by_howlalign,
     safe_read_text,
@@ -98,20 +98,8 @@ class ClaudeAdapter(BaseAdapter):
     ) -> str:
         tools_formatted = "\n".join(f"  - {t}" for t in tools)
         disallowed_formatted = "\n".join(f"  - {t}" for t in disallowed_tools)
-        core_body = f"""name: {name}
-description: {description}
-tools:
-{tools_formatted}
-disallowedTools:
-{disallowed_formatted}
-model: {model}
-permissionMode: {permission_mode}
-
-{prompt.strip()}"""
-        fp = compute_managed_fingerprint(core_body)
-        return f"""---
+        raw = f"""---
 managed_by: howlalign
-managed_fingerprint: {fp}
 name: {name}
 description: {description}
 tools:
@@ -125,6 +113,7 @@ permissionMode: {permission_mode}
 <!-- {MANAGED_BY_MARKER_MD} -->
 {prompt.strip()}
 """
+        return embed_managed_fingerprint(raw, format_type="md")
 
     def generate_changes(
         self,

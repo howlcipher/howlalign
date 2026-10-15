@@ -8,72 +8,64 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
 
 ---
 
-## Milestone Status: v0.1.2 Audit Remediation Hardened & Verified
+## Milestone Status: v0.1.3 Managed-File Correctness & Real Provider Validation Verified
 - **Repository**: `https://github.com/howlcipher/howlalign`
 - **Local Path**: `/run/media/system/tallgeese/dev/howlalign`
 - **Current Branch**: `main`
-- **Version**: `0.1.2` (bumped in `pyproject.toml` and `src/howlalign/__init__.py`)
-- **Verification Status**: 52/52 unit and integration tests passing; ruff format and lint clean.
-- **Critical Isolation**: Zero real user AI assistant configurations (`~/.claude`, `~/.codex`, `~/.gemini`) modified. All tests run in isolated `tmp_path` disposable environments.
+- **Version**: `0.1.3` (bumped in `pyproject.toml`, `src/howlalign/__init__.py`, and `src/howlalign/core/writer.py`)
+- **Verification Status**: 65/65 unit and integration tests passing; ruff format and lint clean; package build clean.
+- **Critical Isolation**: Zero real user AI assistant configurations (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.config/howlalign`) modified. All tests run in isolated `tmp_path` disposable environments.
 
 ---
 
-## v0.1.2 Independent Audit Remediation Deliverables
+## v0.1.3 Deliverables & Verifications
 
-1. **Strict Target Drift & Manifest Integrity Verification (H-001)**:
-   - Validates 64-character hexadecimal format for `post_apply_sha256`.
-   - Fails closed on missing or null `post_apply_sha256` unless `--force` is supplied.
-   - Enforces manifest transaction states (`in_progress`, `completed`, `rolled_back`, `failed`).
-   - Detects target file deletions between apply and restore as drift conflicts.
+1. **Canonical Managed-File Fingerprint Contract**:
+   - Implemented `embed_managed_fingerprint()` in `src/howlalign/adapters/base.py` providing a single authoritative embedding mechanism across Markdown and TOML.
+   - Fixed the root cause of the v0.1.2 fingerprint defect where partial body hashing caused untouched files to immediately fail fingerprint verification.
+   - Refactored `src/howlalign/adapters/claude.py`, `src/howlalign/adapters/codex.py`, and `src/howlalign/adapters/agy.py` to use the unified contract.
 
-2. **Pre-Restore Backup Integrity Verification (H-002)**:
-   - Validates that backup files exist, are regular non-symlink files, and match recorded `original_sha256` prior to restoring.
-   - Rejects truncated, corrupted, or tampered backup files with `BackupCorruptedError`.
-   - Enforces backup integrity strictly: `--force` never bypasses backup integrity verification.
+2. **Conservative Backward-Compatible Migration for v0.1.2 Files**:
+   - Implemented `_matches_legacy_v012_fingerprint()` in `src/howlalign/adapters/base.py`.
+   - Correctly identifies untouched v0.1.2 generated files and upgrades them to canonical v0.1.3 fingerprints upon policy change.
+   - Fails closed on any human modifications or corrupted fingerprints, protecting user-authored changes from silent overwrites.
 
-3. **Truthful Rollback Reporting & Recovery State (H-004)**:
-   - Introduced `RecoveryState` enum (`NONE`, `SUCCEEDED`, `PARTIAL`, `FAILED`).
-   - `ApplyResult` tracks truthful `rolled_back: bool`, `recovery_state: RecoveryState`, and `remaining_modified_files: list[Path]`.
-   - In-memory rollback accurately determines whether all target files were restored or if manual intervention is required.
+3. **Real Native Provider Compatibility Validation**:
+   - **Claude Code (v2.1.301)**: Verified CLI `claude doctor`, validated settings structure (`opusplan` model routing, `effortLevel`, subagents in `.claude/agents/*.md`).
+   - **Codex CLI (v0.162.1)**:
+     - Identified and removed unsupported `default_subagent_model` and `default_subagent_reasoning_effort` from `config.toml`, which caused `--strict-config` warnings.
+     - Identified that Codex CLI's TOML deserializer rejects unknown fields on agent structs (`unknown field managed_by`). Moved provenance marker to top comment `# managed_by = "howlalign"`.
+     - Verified `codex --strict-config doctor` runs cleanly with zero warnings or errors.
+     - Documented project trust model requirement (`[projects."<abs_path>"] trust_level = "trusted"`).
+   - **AGY CLI (v1.3.6)**:
+     - Verified model identifiers via `agy models` (`gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`).
+     - Verified skills (`.agents/skills/<name>/SKILL.md`), subagents (`.agents/agents/<name>/agent.md`), and rule budgets (24 KB file limit).
 
-4. **Non-Destructive Manifest Preservation on Rollback (H-006)**:
-   - Scoped rollback does NOT overwrite `manifest.json` on disk with a truncated list of attempted files.
-   - Preserves complete audit trail on disk and updates manifest status to `rolled_back`.
-   - Traps and recovers from step-4 manifest finalization errors.
-
-5. **Authorization-Controlled Cross-Mount Restore (SEC-007)**:
-   - `restore_backup` accepts an explicit `trusted_workspace: Path | None`.
-   - CLI provides `--workspace` / `-w` option for authorized cross-mount restoration.
-   - Rejects manifests specifying targets outside authorized roots when workspace does not match current directory.
-
-6. **Strict Fail-Closed Policy Validation (ARCH-008)**:
-   - Rejects unknown providers in policy definitions with `PolicyValidationError`.
-   - Validates effort levels, approval policies, sandbox modes, and model role classes.
-   - Rejects non-table configurations for providers.
-
-7. **Native AGY Settings Compatibility (COMPAT-009)**:
-   - Removed fabricated `planningModel` key from generated AGY `settings.json`.
-   - Preserved valid settings keys (`model`, `effort`).
-   - Added `Doctor` diagnostic check for deprecated or invalid `planningModel` in existing configurations.
-
-8. **Provenance Fingerprinting & User Modification Protection (ARCH-010)**:
-   - Bounded `is_file_managed_by_howlalign` to header lines (first 20 lines) to prevent false positives from user documentation or code quoting markers.
-   - Embedded SHA-256 provenance fingerprints in generated subagent headers and frontmatter.
-   - Detects subsequent user edits to managed files and protects them from inadvertent overwrite.
-
-9. **Robust Credential Masking & Diff Fidelity (SEC-011)**:
-   - Expanded secret patterns covering multi-line private keys, Bearer headers, and assignment tokens.
-   - Added negative lookahead `(?!\*{4}\[REDACTED)` to prevent exponential double-redaction.
-   - Generates non-empty truthful diff placeholders when secret changes mask to identical tokens.
-   - `Doctor` credential check scans for sensitive keys without printing secret prefixes to terminal.
+4. **Complete Alignment Lifecycle Testing**:
+   - Validated full lifecycle in `tests/test_v013_managed_files.py` across both project and global scopes:
+     - `init` -> `check` -> `diff` -> `apply` -> `check after apply` (clean no-op) -> repeated `apply` (idempotent 0 changes).
+     - Policy modification updates untouched managed files smoothly.
+     - Manual user edits are detected and preserved with conflict status and exit code 1.
+     - Drift detection blocks accidental overwrites unless `--force` is used.
+     - Backup and restore preserve file permissions and directory isolation.
+     - Diagnostics (`doctor`) inspect healthy and obsolete configurations accurately.
 
 ---
 
 ## Test & Quality Verification Results
-- **Pytest**: `52 passed in 2.29s` across 8 test modules (`test_cli`, `test_adapters`, `test_differ`, `test_doctor`, `test_engine`, `test_policy`, `test_writer`, `test_v012_remediation`).
+- **Pytest**: `65 passed in 6.21s` across 9 test modules:
+  - `tests/test_v013_managed_files.py` (13 tests)
+  - `tests/test_v012_remediation.py` (14 tests)
+  - `tests/test_adapters.py` (10 tests)
+  - `tests/test_cli.py` (7 tests)
+  - `tests/test_differ.py` (6 tests)
+  - `tests/test_doctor.py` (4 tests)
+  - `tests/test_engine.py` (3 tests)
+  - `tests/test_policy.py` (4 tests)
+  - `tests/test_writer.py` (4 tests)
 - **Ruff Lint**: `ruff check .` -> `All checks passed!`
-- **Ruff Format**: `ruff format --check .` -> `28 files already formatted`
-- **End-to-End Lifecycle Dogfooding**: 14/14 steps executed cleanly in isolated sandbox.
+- **Ruff Format**: `ruff format --check .` -> `29 files already formatted`
+- **Package Build**: `python -m build` -> successfully built wheel and sdist for `howlalign-0.1.3`.
 
 ---
 
@@ -81,4 +73,4 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
 - v0.1.0: Initial core implementation and multi-assistant alignment engine.
 - v0.1.1: Security hardening, private backups, fail-closed parsing, and rule budget enforcement.
 - v0.1.2: Independent audit remediation, backup integrity verification, truthful rollback reporting, provenance fingerprinting, and AGY settings compatibility.
-
+- v0.1.3: Canonical managed-file fingerprint contract, v0.1.2 conservative migration, real native CLI compatibility validation, and full lifecycle verification.

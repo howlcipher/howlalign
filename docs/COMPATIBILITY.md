@@ -1,71 +1,104 @@
 # Provider Compatibility Matrix
 
-This document summarizes native capability translations, evaluated versions, and known runtime limitations for supported coding assistants.
+This document provides a comprehensive capability classification, evaluated versions, runtime validation status, and known behavioral constraints for AI coding assistant providers supported by HowlAlign v0.1.3.
+
+---
+
+## Evaluation Standard & Status Classifications
+
+Each native capability is classified under one of four rigorous standards:
+- **Runtime Verified**: Verified against the actual installed provider CLI executable (`claude`, `codex`, `agy`) in an isolated, disposable environment.
+- **Schema / Documentation Verified**: Verified against official provider documentation, CLI help menus, or local schema definitions where read-only CLI commands are available.
+- **Not Verified**: Plausible capability based on provider ecosystem patterns, but unverified due to lack of local schema or read-only CLI flags.
+- **Unsupported**: Explicitly rejected by the provider CLI (e.g. unknown TOML fields, CLI configuration deserializer errors, or forbidden security bypasses), and removed or guarded by HowlAlign.
 
 ---
 
 ## 1. Claude Code (Anthropic CLI)
 
-- **Target Evaluated Version:** `2.1.300`
-- **Configuration Files:**
+- **Target Evaluated Version:** `2.1.301`
+- **Installed Status:** Installed (`/home/howlcipher/.local/bin/claude`)
+- **Validation Command:** `claude doctor`, `claude --help`
+- **Configuration Locations:**
   - Global: `~/.claude/settings.json`
   - Project: `.claude/settings.json`
   - Guidelines: `CLAUDE.md`, `.claude/rules/*.md`
-  - Subagents: `.claude/agents/<name>.md`
-- **Supported Capabilities:**
-  - Model selection via `"model"` alias (`opusplan`, `opus`, `sonnet`, `haiku`) or canonical ID.
-  - Thinking effort levels via `"modelSettings.<model>.effortLevel"` (`low`, `medium`, `high`, `xhigh`).
-  - Native custom subagents in Markdown with YAML frontmatter specifying allowed/disallowed tools and permission modes.
-  - Dynamic mode routing via `opusplan` (Opus in Plan mode, Sonnet in Implementation mode).
-  - Fine-grained permission rules (`allow`, `deny`, `ask`).
-- **Unsupported / Restricted Behaviors:**
-  - `bypassPermissionsMode` cannot be enabled from repository-resident settings files (blocked by Claude Code security boundary).
-  - Automatic dynamic model switching outside `opusplan` is not supported without runtime CLI flags.
-  - Noninteractive sessions (`-p`) silently drop interactive permission prompts unless `--permission-mode acceptEdits` or `--permission-prompts none` is explicitly provided.
+  - Specialized Subagents: `.claude/agents/<name>.md`
+
+### Capability Classification
+
+| Capability | Status | Notes |
+| :--- | :--- | :--- |
+| Model selection (`opusplan`, canonical IDs) | **Runtime Verified** | Validated via `settings.json` `"model"` property and CLI execution. |
+| Thinking effort levels (`effortLevel`) | **Schema / Doc Verified** | Set via `"modelSettings.<model>.effortLevel"` (`low`, `medium`, `high`, `xhigh`). |
+| Specialized Subagents (`.claude/agents/*.md`) | **Runtime Verified** | Markdown agent format with YAML frontmatter specifying `name`, `description`, `tools`, and `permissionMode`. |
+| Dynamic mode routing (`opusplan`) | **Schema / Doc Verified** | Uses Opus during Plan Mode and Sonnet during Implementation Mode. |
+| Granular permissions (`allow`, `deny`, `ask`) | **Schema / Doc Verified** | Specified under `"permissions"` key in `settings.json`. |
+| Project-level `CLAUDE.md` guidelines | **Runtime Verified** | Automatically loaded into context during session startup. |
+| `bypassPermissionsMode` in repository config | **Unsupported** | Blocked by Claude Code security boundary. Repository-level config cannot bypass permissions. |
+| Interactive prompts in noninteractive mode (`-p`) | **Unsupported** | Silently fails unless `--permission-mode acceptEdits` or `--permission-prompts none` is supplied. |
 
 ---
 
 ## 2. OpenAI Codex CLI
 
 - **Target Evaluated Version:** `0.162.1`
-- **Configuration Files:**
+- **Installed Status:** Installed (`/home/howlcipher/.local/bin/codex`)
+- **Validation Command:** `codex --strict-config doctor`, `codex --help`
+- **Configuration Locations:**
   - Global: `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`)
   - Project: `.codex/config.toml`
-  - Guidelines: `AGENTS.md` (root and hierarchical subdirectories)
-  - Subagents: `[agents.<name>]` pointing to `.codex/agents/<name>.toml`
-- **Supported Capabilities:**
-  - Model selection via `model = "<model_slug>"` (`gpt-6.1-sol`, `gpt-6-astra`, `gpt-5.6-luna`, `o3`).
-  - Six-tier reasoning effort: `model_reasoning_effort` (`low`, `medium`, `high`, `xhigh`, `max`, `ultra`).
-  - Plan mode reasoning: `plan_mode_reasoning_effort`.
-  - Subagent default models: `default_subagent_model`, `default_subagent_reasoning_effort`.
-  - Sandbox modes: `sandbox_mode = "workspace-write"` (backed by Bubblewrap and Landlock on Linux).
-  - Automated approvals reviewer: `approval_policy = "never"`, `approvals_reviewer = "auto_review"`.
-  - Hierarchical `AGENTS.md` spec preloaded into developer context.
-- **Unsupported / Restricted Behaviors:**
-  - Project `.codex/config.toml` is **ignored** unless the repository path is marked as trusted in user config (`[projects."<abs_path>"] trust_level = "trusted"`). HowlAlign doctor checks and reports this requirement.
-  - Automatic runtime model switching without subagents is not supported.
-  - `ultra` reasoning effort is rejected by models that only support up to `max`.
+  - Guidelines: `AGENTS.md` (root and directory hierarchy)
+  - Specialized Subagents: `[agents.<name>]` pointing to `.codex/agents/<name>.toml`
+
+### Capability Classification
+
+| Capability | Status | Notes |
+| :--- | :--- | :--- |
+| Model selection (`gpt-6.1-sol`, `gpt-6-astra`, `o3`) | **Runtime Verified** | Validated via `config.toml` `model = "..."`. |
+| Six-tier reasoning effort (`model_reasoning_effort`) | **Runtime Verified** | Values: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. |
+| Plan mode reasoning effort (`plan_mode_reasoning_effort`) | **Runtime Verified** | Configured in `config.toml`. |
+| Agent role files (`.codex/agents/*.toml`) | **Runtime Verified** | Roles define `description`, `developer_instructions`, `model`, and `model_reasoning_effort`. |
+| Project Trust Boundary (`[projects."<path>"]`) | **Runtime Verified** | Project `.codex/config.toml` is ignored unless explicitly trusted in global config (`trust_level = "trusted"`). |
+| Linux Sandbox mode (`sandbox_mode = "workspace-write"`) | **Runtime Verified** | Uses Bubblewrap & Landlock isolation. |
+| Top-level comments provenance (`# managed_by = "howlalign"`) | **Runtime Verified** | Comment-based tagging preserved without corrupting TOML deserializer. |
+| Global `default_subagent_model` in `config.toml` | **Unsupported** | Codex CLI deserializer rejects this in `config.toml` under `--strict-config`. Removed in v0.1.3; subagent models are configured per agent role TOML. |
+| Global `default_subagent_reasoning_effort` in `config.toml` | **Unsupported** | Codex CLI deserializer rejects this in `config.toml` under `--strict-config`. Removed in v0.1.3; subagent effort is configured per agent role TOML. |
+| Data table `managed_by = "howlalign"` in role TOMLs | **Unsupported** | Causes deserializer failure (`unknown field managed_by`). Removed from table data and stored as header comment in v0.1.3. |
 
 ---
 
 ## 3. Google Antigravity CLI (AGY)
 
 - **Target Evaluated Version:** `1.3.6`
-- **Configuration Files:**
+- **Installed Status:** Installed (`/home/howlcipher/.local/bin/agy`)
+- **Validation Command:** `agy models`, `agy doctor`, `agy --help`
+- **Configuration Locations:**
   - Global: `~/.gemini/antigravity-cli/settings.json`, `~/.gemini/config/config.json`
   - Workspace Guidelines: `GEMINI.md`, `AGENTS.md`, `.agents/rules/*.md`
   - Workspace Skills: `.agents/skills/<name>/SKILL.md`
   - Workspace Agents: `.agents/agents/<name>/agent.md`
-- **Supported Capabilities:**
-  - Model selection: `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`.
-  - Thinking effort levels via `--effort <low|medium|high|xhigh|max>` and `settings.json` (`effort`).
-  - Execution modes: `accept-edits`, `auto` (with safety reviewer agent), `plan`.
-  - Progressive skills (`SKILL.md` with YAML frontmatter + scripts/references).
-  - Custom markdown agents (`agent.md` with YAML frontmatter `subagent: true`, `model`, and SHA-256 fingerprint).
-  - Tool permission modes: `proceed-in-sandbox`, `always-proceed`, `request-review`.
-- **Unsupported / Restricted Behaviors:**
-  - `settings.json` schema does not recognize fabricated keys such as `planningModel`. HowlAlign strictly generates valid keys (`model`, `effort`) and Doctor flags deprecated `planningModel` in legacy configurations.
-  - Rule files have a hard **24 KB (24,000 bytes)** cap per file. Files exceeding this are truncated by the CLI. HowlAlign doctor validates rule file sizes.
-  - Aggregate rules budget is **20,000 tokens**. Over-budget rules are demoted to on-demand file pointers.
-  - Automatic runtime model switching requires multi-agent delegation or CLI `--model` specification.
 
+### Capability Classification
+
+| Capability | Status | Notes |
+| :--- | :--- | :--- |
+| Model selection (`gemini-3.8-flash-*`, `claude-*`) | **Runtime Verified** | Verified active model registry via `agy models`. |
+| Thinking effort levels (`effort` / `--effort`) | **Runtime Verified** | Validated via `settings.json` (`low`, `medium`, `high`, `xhigh`, `max`). |
+| Progressive skills (`.agents/skills/<name>/SKILL.md`) | **Runtime Verified** | YAML frontmatter (`name`, `description`) + markdown instructions. |
+| Custom subagents (`.agents/agents/<name>/agent.md`) | **Runtime Verified** | YAML frontmatter (`subagent: true`, `model`, `tools`) + instructions. |
+| Execution modes (`accept-edits`, `auto`, `plan`) | **Schema / Doc Verified** | Supported via runtime CLI flags and settings. |
+| Rule file size cap (24 KB per file) | **Runtime Verified** | Files over 24,000 bytes are truncated by AGY CLI; enforced by `howlalign doctor`. |
+| Aggregate rules token budget (20,000 tokens) | **Schema / Doc Verified** | Excess rules demoted to file references. |
+| Fabricated `planningModel` in `settings.json` | **Unsupported** | Not recognized by AGY schema. Flagged by `howlalign doctor` and removed. |
+
+---
+
+## Summary of Unsupported Setting Removals in v0.1.3
+
+1. **Codex CLI `default_subagent_*` keys in `config.toml`**:
+   Removed from `src/howlalign/adapters/codex.py`. Codex CLI 0.162.1 config parser emits strict configuration warnings for `default_subagent_model` and `default_subagent_reasoning_effort`. Subagent models and reasoning efforts are set within each specific `.codex/agents/<name>.toml`.
+2. **Codex CLI `managed_by` key in agent role TOML data tables**:
+   Codex deserializes agent role files directly into an internal Rust struct with `deny_unknown_fields`. Emitting `managed_by = "howlalign"` inside the TOML data table caused Codex to log `Ignoring malformed agent role definition: failed to deserialize agent role file ... unknown field managed_by`. HowlAlign v0.1.3 formats the provenance and fingerprint metadata as top-level comments (`# managed_by = "howlalign"`, `# howlalign: fingerprint = ...`).
+3. **AGY `planningModel` in `settings.json`**:
+   AGY only parses `"model"` and `"effort"` from `settings.json`.

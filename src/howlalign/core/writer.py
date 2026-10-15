@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from howlalign import __version__
 from howlalign.core.constants import (
     BACKUP_DIR_MODE,
     BACKUP_FILE_MODE,
@@ -136,7 +137,7 @@ class ConfigWriter:
             pass
 
         manifest: dict[str, Any] = {
-            "version": "0.1.2",
+            "version": __version__,
             "timestamp": ts,
             "workspace": str(self.workspace),
             "status": "in_progress",

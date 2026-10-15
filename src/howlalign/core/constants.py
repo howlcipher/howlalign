@@ -69,9 +69,12 @@ def get_default_backup_root(home_dir: Path | None = None) -> Path:
     if env_override:
         return Path(env_override).resolve()
 
+    if home_dir is not None:
+        return home_dir / ".local" / "state" / "howlalign" / "backups"
+
     xdg_state = os.environ.get("XDG_STATE_HOME")
     if xdg_state:
         return Path(xdg_state).resolve() / "howlalign" / "backups"
 
-    home = home_dir or Path.home()
+    home = Path.home()
     return home / ".local" / "state" / "howlalign" / "backups"

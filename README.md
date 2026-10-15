@@ -116,7 +116,7 @@ HowlAlign operates under strict configuration safety rules:
 - **Target Drift Detection:** Restore operations refuse to overwrite target files that have drifted or been deleted after apply unless `--force` is specified.
 - **Cross-Mount Authorization:** Requires explicit `--workspace` / `-w` authorization to restore files outside the current working tree, preventing path-traversal attacks via malicious manifests.
 - **Truthful Rollback Reporting:** Accurately reports rollback outcomes (`SUCCEEDED`, `PARTIAL`, `FAILED`) and tracks un-reverted files rather than claiming success unconditionally.
-- **User Provenance Protection & Fingerprinting:** Tags managed files with cryptographic fingerprints (`# howlalign: fingerprint = ...`) and bounds detection to header lines; detects and protects user-customized files from overwrite.
+- **User Provenance Protection & Canonical Fingerprinting:** Tags managed files with cryptographic fingerprints (`# howlalign: fingerprint = ...` or YAML `fingerprint: ...`) computed via a unified contract; provides backward-compatible detection for legacy v0.1.2 files, cleanly detecting human customizations and protecting them from overwrite.
 - **Fail-Closed Configuration & Policy Safety:** Halts with explicit domain exceptions (`ConfigurationParseError`, `PolicyValidationError`) rather than resetting or corrupting malformed configurations.
 - **Dedicated Private Backups:** Backups are stored in user-private XDG state locations with restrictive permissions (`0o700` directories, `0o600` files), preventing accidental git commits.
 - **Atomic Operations & Permission Preservation:** Writes target configurations through atomic temporary replacements, preserving file modes on existing configurations.

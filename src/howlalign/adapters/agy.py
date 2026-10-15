@@ -8,7 +8,7 @@ from typing import Any
 
 from howlalign.adapters.base import (
     BaseAdapter,
-    compute_managed_fingerprint,
+    embed_managed_fingerprint,
     has_user_modifications,
     is_file_managed_by_howlalign,
     safe_read_text,
@@ -84,11 +84,8 @@ class AgyAdapter(BaseAdapter):
         description: str,
         prompt: str,
     ) -> str:
-        body = f"# {name.capitalize()} Skill\n\n{prompt.strip()}"
-        fp = compute_managed_fingerprint(body)
-        return f"""---
+        raw = f"""---
 managed_by: howlalign
-managed_fingerprint: {fp}
 name: {name}
 description: >-
   {description}
@@ -99,6 +96,7 @@ description: >-
 
 {prompt.strip()}
 """
+        return embed_managed_fingerprint(raw, format_type="md")
 
     def _generate_agent_markdown(
         self,
@@ -109,20 +107,8 @@ description: >-
         read_only: bool = False,
     ) -> str:
         disallowed_block = 'disallowedTools: ["Edit", "Write"]\n' if read_only else ""
-        body = f"""name: {name}
-description: >-
-  {description}
-mainAgent: false
-subagent: true
-model: {model}
-{disallowed_block}
-# {name.capitalize()} Agent
-
-{prompt.strip()}"""
-        fp = compute_managed_fingerprint(body)
-        return f"""---
+        raw = f"""---
 managed_by: howlalign
-managed_fingerprint: {fp}
 name: {name}
 description: >-
   {description}
@@ -136,6 +122,7 @@ model: {model}
 
 {prompt.strip()}
 """
+        return embed_managed_fingerprint(raw, format_type="md")
 
     def generate_changes(
         self,

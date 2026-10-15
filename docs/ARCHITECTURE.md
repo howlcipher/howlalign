@@ -109,3 +109,23 @@ Configuration files control critical developer tool behavior. HowlAlign enforces
 9. **Path Traversal & Symlink Protection:** Target file paths and symlink parent chains are strictly validated against authorized roots, raising `PathTraversalError` or `UnsafeSymlinkError` upon violation.
 10. **Fail-Closed Configuration & Policy Safety:** Malformed existing configurations immediately halt alignment with `ConfigurationParseError` rather than resetting or wiping user settings. Policy files with unknown providers or invalid enum parameters fail closed with `PolicyValidationError`.
 11. **Credential Masking & Diff Truthfulness:** Diagnostic routines and unified diff previews mask API keys, tokens, and authorization headers without recursive double-redaction. Diffs that change secrets emit explicit masked modification markers so previews remain non-empty and truthful without leaking secret bytes.
+
+## 6. Managed-File Canonical Fingerprint Contract & Migration
+
+In v0.1.3, HowlAlign establishes a unified, canonical contract for tracking provenance and detecting user edits across all managed markdown and TOML files:
+
+### 1. Canonical Fingerprint Contract
+- **Embedding:** `embed_managed_fingerprint(raw_content, format_type)` embeds the SHA-256 fingerprint:
+  - For Markdown (`format_type="md"`): Inserted into YAML frontmatter as `fingerprint: "<sha256>"` if frontmatter exists, or appended as `<!-- howlalign: fingerprint = <sha256> -->`.
+  - For TOML (`format_type="toml"`): Appended directly after the `# managed_by = "howlalign"` header as `# howlalign: fingerprint = <sha256>`.
+- **Computation:** `compute_managed_fingerprint(content)` normalizes line endings (`\r\n` -> `\n`), strips the fingerprint line itself (matching `FINGERPRINT_LINE_REGEX`), and computes the SHA-256 digest of the remaining complete file text.
+- **Verification:** `has_user_modifications(content)` extracts the stored fingerprint and compares it against `compute_managed_fingerprint(content)`. If the hash matches, the file is identified as untouched and eligible for updates.
+
+### 2. Backward-Compatible v0.1.2 Migration
+In v0.1.2, adapters computed fingerprints over partial bodies prior to prepending frontmatter or headers. To avoid breaking or misclassifying untouched v0.1.2 files as user conflicts, HowlAlign implements a conservative fallback check:
+- `_matches_legacy_v012_fingerprint(content, stored_fp)` checks if the stored hash matches the legacy calculation over:
+  - Markdown: Body content after YAML frontmatter (for Claude and AGY subagents) or markdown body after headers (AGY skills).
+  - TOML: Raw TOML body excluding the top header comment line.
+- If the legacy hash matches, the file is verified as an untouched legacy file. When policy updates occur, HowlAlign seamlessly regenerates the file using the canonical v0.1.3 format without manual intervention or conflict errors.
+- If neither the canonical nor the legacy hash matches, `has_user_modifications` returns `True`, failing closed to guarantee human edits are never silently overwritten.
+

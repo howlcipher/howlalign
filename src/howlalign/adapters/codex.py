@@ -10,7 +10,7 @@ import toml
 
 from howlalign.adapters.base import (
     BaseAdapter,
-    compute_managed_fingerprint,
+    embed_managed_fingerprint,
     has_user_modifications,
     is_file_managed_by_howlalign,
     safe_read_text,
@@ -72,10 +72,12 @@ class CodexAdapter(BaseAdapter):
         if plan_role:
             data["plan_mode_reasoning_effort"] = plan_role.effort.value
 
-        support_role = policy.roles.get(RoleClass.SUPPORT)
-        if support_role:
-            data["default_subagent_model"] = support_role.codex_model
-            data["default_subagent_reasoning_effort"] = support_role.effort.value
+        # Note: default_subagent_model and default_subagent_reasoning_effort are not recognized
+        # by Codex CLI in config.toml (triggers unrecognized setting warnings under --strict-config).
+        # Subagent models and reasoning efforts are configured per-agent in their role toml files.
+        # We also clean up obsolete keys if present in existing config
+        data.pop("default_subagent_model", None)
+        data.pop("default_subagent_reasoning_effort", None)
 
         # Honor explicit provider overrides
         codex_overrides = policy.overrides.get("codex", {})
@@ -130,7 +132,6 @@ class CodexAdapter(BaseAdapter):
         read_only: bool = False,
     ) -> str:
         role_data: dict[str, Any] = {
-            "managed_by": "howlalign",
             "name": name,
             "description": description,
             "developer_instructions": prompt.strip(),
@@ -141,9 +142,8 @@ class CodexAdapter(BaseAdapter):
         if read_only:
             role_data["sandbox_mode"] = "read-only"
 
-        role_body = toml.dumps(role_data)
-        fp = compute_managed_fingerprint(role_body)
-        return f'# {MANAGED_BY_MARKER_TOML}\n# managed_fingerprint = "{fp}"\n' + role_body
+        raw = f"# {MANAGED_BY_MARKER_TOML}\n" + toml.dumps(role_data)
+        return embed_managed_fingerprint(raw, format_type="toml")
 
     def generate_changes(
         self,
@@ -294,7 +294,20 @@ Repository engineering conventions aligned via HowlAlign (policy v{policy.schema
             content = safe_read_text(cfg_path)
             if content and content.strip():
                 try:
-                    toml.loads(content)
+                    c_data = toml.loads(content)
+                    if (
+                        "default_subagent_model" in c_data
+                        or "default_subagent_reasoning_effort" in c_data
+                    ):
+                        items.append(
+                            DiagnosticItem(
+                                severity="INFO",
+                                category="COMPATIBILITY",
+                                message=f"Existing Codex config at '{cfg_path}' contains obsolete subagent settings that Codex CLI ignores.",
+                                provider="codex",
+                                action="Run 'howlalign apply' to align config.toml to native schema.",
+                            )
+                        )
                 except Exception as err:
                     items.append(
                         DiagnosticItem(
@@ -305,6 +318,27 @@ Repository engineering conventions aligned via HowlAlign (policy v{policy.schema
                             action="Repair syntax in config.toml to enable alignment.",
                         )
                     )
+
+        # Check existing agent files for invalid managed_by in TOML body
+        agents_dir = self._get_agents_dir(is_global)
+        if agents_dir.is_dir():
+            for rf in agents_dir.glob("*.toml"):
+                r_text = safe_read_text(rf)
+                if r_text:
+                    try:
+                        r_data = toml.loads(r_text)
+                        if "managed_by" in r_data:
+                            items.append(
+                                DiagnosticItem(
+                                    severity="WARNING",
+                                    category="COMPATIBILITY",
+                                    message=f"Codex agent file '{rf.name}' contains 'managed_by' in TOML body, which causes Codex CLI deserialization errors.",
+                                    provider="codex",
+                                    action="Run 'howlalign apply' to migrate to comment-only provenance marker.",
+                                )
+                            )
+                    except Exception:
+                        pass
 
         # Check repository trust requirement for project configs
         if not is_global:

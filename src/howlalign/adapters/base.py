@@ -19,6 +19,8 @@ FINGERPRINT_PATTERN_MD = re.compile(r"^\s*managed_fingerprint:\s*([0-9a-fA-F]+)"
 FINGERPRINT_PATTERN_TOML = re.compile(
     r'^\s*#?\s*managed_fingerprint\s*=\s*["\']([0-9a-fA-F]+)["\']', re.MULTILINE
 )
+FINGERPRINT_LINE_REGEX = re.compile(r"^\s*(?:#|<!--)?\s*managed_fingerprint\b.*$", re.IGNORECASE)
+MARKER_LINE_REGEX = re.compile(r"^\s*(?:#|<!--)?\s*managed[ _-]by\b", re.IGNORECASE)
 
 
 def safe_read_text(path: Path) -> str | None:
@@ -28,15 +30,59 @@ def safe_read_text(path: Path) -> str | None:
 
 def compute_managed_fingerprint(text: str) -> str:
     """Compute stable SHA-256 fingerprint of the core content ignoring variable metadata lines."""
-    lines = [
-        line.strip()
-        for line in text.splitlines()
-        if not line.strip().startswith("managed_fingerprint")
-        and not line.strip().startswith("# managed_fingerprint")
-        and not line.strip().startswith("<!-- managed_fingerprint")
-    ]
+    lines = [line.strip() for line in text.splitlines() if not FINGERPRINT_LINE_REGEX.match(line)]
     core_content = "\n".join(lines)
     return hashlib.sha256(core_content.encode("utf-8")).hexdigest()[:16]
+
+
+def embed_managed_fingerprint(content: str, format_type: str = "md") -> str:
+    """Compute and embed canonical managed_fingerprint into content header.
+
+    Computes fingerprint over content excluding any fingerprint metadata lines,
+    then embeds the canonical fingerprint line directly under the managed_by marker.
+    """
+    fp = compute_managed_fingerprint(content)
+    is_toml = format_type.lower() == "toml"
+    fp_line = f'# managed_fingerprint = "{fp}"' if is_toml else f"managed_fingerprint: {fp}"
+
+    lines = content.splitlines()
+    replaced = False
+    new_lines: list[str] = []
+
+    # 1. If fingerprint line already exists, replace it
+    for line in lines:
+        if FINGERPRINT_LINE_REGEX.match(line):
+            new_lines.append(fp_line)
+            replaced = True
+        else:
+            new_lines.append(line)
+
+    if replaced:
+        result = "\n".join(new_lines)
+        if content.endswith("\n") and not result.endswith("\n"):
+            result += "\n"
+        return result
+
+    # 2. Otherwise insert directly after managed_by marker
+    new_lines = []
+    inserted = False
+    for line in lines:
+        new_lines.append(line)
+        if not inserted and MARKER_LINE_REGEX.match(line):
+            new_lines.append(fp_line)
+            inserted = True
+
+    if not inserted:
+        # Fallback: if markdown with frontmatter, insert after opening ---
+        if not is_toml and lines and lines[0].strip() == "---":
+            new_lines = [lines[0], fp_line] + lines[1:]
+        else:
+            new_lines.insert(0, fp_line)
+
+    result = "\n".join(new_lines)
+    if content.endswith("\n") and not result.endswith("\n"):
+        result += "\n"
+    return result
 
 
 def extract_managed_fingerprint(content: str | None, format_type: str = "md") -> str | None:
@@ -49,6 +95,44 @@ def extract_managed_fingerprint(content: str | None, format_type: str = "md") ->
     return m.group(1) if m else None
 
 
+def _matches_legacy_v012_fingerprint(
+    content: str, recorded_fp: str, format_type: str = "md"
+) -> bool:
+    """Verify if content matches the legacy v0.1.2 fingerprint computation.
+
+    v0.1.2 computed fingerprints over partial bodies rather than full header-bearing files:
+    - TOML: role body excluding comment lines
+    - AGY skill: markdown body following frontmatter excluding comment markers
+    - Claude/AGY agent: frontmatter fields combined with markdown body
+    """
+    if format_type.lower() == "toml":
+        body_lines = [line for line in content.splitlines() if not line.strip().startswith("#")]
+        return compute_managed_fingerprint("\n".join(body_lines)) == recorded_fp
+
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return False
+
+    fm_lines = [line for line in parts[1].splitlines() if not line.strip().startswith("managed_")]
+    body_lines = [line for line in parts[2].splitlines() if not line.strip().startswith("<!--")]
+
+    # Candidate 1: AGY skill format (body only)
+    skill_body = "\n".join(body_lines).strip()
+    if compute_managed_fingerprint(skill_body) == recorded_fp:
+        return True
+
+    # Candidate 2: Claude agent or AGY agent format (frontmatter fields + body)
+    combined_1 = "\n".join(fm_lines).strip() + "\n\n" + "\n".join(body_lines).strip()
+    if compute_managed_fingerprint(combined_1) == recorded_fp:
+        return True
+
+    combined_2 = "\n".join(fm_lines).strip() + "\n" + "\n".join(body_lines).strip()
+    if compute_managed_fingerprint(combined_2) == recorded_fp:
+        return True
+
+    return False
+
+
 def has_user_modifications(content: str | None, format_type: str = "md") -> bool:
     """Check if a managed file has user modifications by comparing content with recorded fingerprint."""
     if not content:
@@ -57,7 +141,12 @@ def has_user_modifications(content: str | None, format_type: str = "md") -> bool
     if not fp:
         return False
     current_fp = compute_managed_fingerprint(content)
-    return current_fp != fp
+    if current_fp == fp:
+        return False
+    # Check legacy v0.1.2 fingerprint compatibility for untouched files
+    if _matches_legacy_v012_fingerprint(content, fp, format_type=format_type):
+        return False
+    return True
 
 
 def is_file_managed_by_howlalign(content: str | None, format_type: str = "md") -> bool:
