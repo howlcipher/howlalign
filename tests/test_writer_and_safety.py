@@ -1,9 +1,14 @@
 """Tests for safe atomic writing, backups, revalidation, and security boundaries."""
 
+import json
 from pathlib import Path
 
 import pytest
 
+from howlalign.core.exceptions import (
+    PathTraversalError,
+    UnsafeSymlinkError,
+)
 from howlalign.core.models import ConfigChange, ProviderType
 from howlalign.core.writer import (
     ConfigWriter,
@@ -104,7 +109,7 @@ def test_path_traversal_safety(tmp_path: Path):
 
     # Attempting to validate path outside workspace and home
     target_outside = outside / "bad.txt"
-    with pytest.raises(PermissionError, match="outside allowed roots"):
+    with pytest.raises(PathTraversalError, match="escapes authorized roots"):
         validate_path_safety(target_outside, allowed_roots=[workspace])
 
 
@@ -119,5 +124,131 @@ def test_unsafe_symlink_safety(tmp_path: Path):
     symlink_in_workspace = workspace / "link_to_secret.env"
     symlink_in_workspace.symlink_to(secret)
 
-    with pytest.raises(PermissionError, match="Unsafe symlink detected"):
+    with pytest.raises(UnsafeSymlinkError, match="Unsafe symlink detected"):
         validate_path_safety(symlink_in_workspace, allowed_roots=[workspace])
+
+
+def test_permission_preservation_on_atomic_write(tmp_path: Path):
+    writer = ConfigWriter(workspace_dir=tmp_path)
+    sensitive_file = tmp_path / "secret.toml"
+    sensitive_file.write_text("old = true\n", encoding="utf-8")
+    sensitive_file.chmod(0o600)
+
+    # Overwrite file
+    writer.atomic_write(sensitive_file, "new = true\n")
+    assert sensitive_file.read_text(encoding="utf-8") == "new = true\n"
+    # Mode should stay 0o600
+    assert (sensitive_file.stat().st_mode & 0o777) == 0o600
+
+
+def test_restore_conflict_drift_detection_and_force(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writer = ConfigWriter(workspace_dir=workspace)
+
+    target = workspace / "settings.json"
+    target.write_text('{"version": 1}\n', encoding="utf-8")
+
+    change = ConfigChange(
+        file_path=target,
+        original_content='{"version": 1}\n',
+        proposed_content='{"version": 2}\n',
+        description="Bump version",
+        provider=ProviderType.CLAUDE,
+    )
+
+    res = writer.apply([change], create_backup=True)
+    assert res.success is True
+    assert res.backup_dir is not None
+    backup_path = Path(res.backup_dir)
+
+    # Drift: User or external tool modifies the file after apply
+    target.write_text('{"version": 3, "user_edit": true}\n', encoding="utf-8")
+
+    # Restore without force must fail and protect the drifted file
+    restore_fail = writer.restore_backup(backup_path, force=False)
+    assert restore_fail.success is False
+    assert any("Target drift conflict" in err for err in restore_fail.errors)
+    assert "user_edit" in target.read_text(encoding="utf-8")
+
+    # Restore with force must succeed and restore original content
+    restore_force = writer.restore_backup(backup_path, force=True)
+    assert restore_force.success is True
+    assert target.read_text(encoding="utf-8") == '{"version": 1}\n'
+
+
+def test_restore_malformed_and_traversal_manifest(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writer = ConfigWriter(workspace_dir=workspace)
+
+    # 1. Non-existent manifest
+    fake_backup = tmp_path / "empty_backup"
+    fake_backup.mkdir()
+    res1 = writer.restore_backup(fake_backup)
+    assert res1.success is False
+    assert any("missing manifest.json" in e for e in res1.errors)
+
+    # 2. Malformed manifest JSON
+    manifest = fake_backup / "manifest.json"
+    manifest.write_text("not json", encoding="utf-8")
+    res2 = writer.restore_backup(fake_backup)
+    assert res2.success is False
+    assert any("Failed to parse backup manifest" in e for e in res2.errors)
+
+    # 3. Path traversal in backup_path
+    outside_file = tmp_path / "evil.txt"
+    outside_file.write_text("evil\n", encoding="utf-8")
+    target = workspace / "test.txt"
+    target.write_text("orig\n", encoding="utf-8")
+
+    manifest_payload = {
+        "files": [
+            {
+                "target_path": str(target),
+                "backup_path": str(outside_file),
+                "existed": True,
+            }
+        ]
+    }
+    manifest.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    res3 = writer.restore_backup(fake_backup)
+    assert res3.success is False
+    assert any("outside backup directory" in e for e in res3.errors)
+
+
+def test_in_memory_rollback_on_failure(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writer = ConfigWriter(workspace_dir=workspace)
+
+    f1 = workspace / "f1.txt"
+    f1.write_text("original f1\n", encoding="utf-8")
+
+    # Target 2 will point outside workspace to trigger a failure during atomic_write
+    f2_bad = tmp_path / "outside" / "f2.txt"
+
+    changes = [
+        ConfigChange(
+            file_path=f1,
+            original_content="original f1\n",
+            proposed_content="updated f1\n",
+            description="Change f1",
+            provider=ProviderType.CLAUDE,
+        ),
+        ConfigChange(
+            file_path=f2_bad,
+            original_content=None,
+            proposed_content="created f2\n",
+            description="Change f2 outside allowed root",
+            provider=ProviderType.CODEX,
+            is_creation=True,
+        ),
+    ]
+
+    # Apply with create_backup=False to exercise in-memory rollback
+    res = writer.apply(changes, create_backup=False)
+    assert res.success is False
+    assert res.rolled_back is True
+    # f1 should be rolled back to original content
+    assert f1.read_text(encoding="utf-8") == "original f1\n"

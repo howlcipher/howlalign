@@ -52,7 +52,7 @@ def test_cli_init_check_diff_apply_doctor_workflow(tmp_path: Path):
         # 5. Diff
         diff_res = runner.invoke(cli, ["diff"])
         assert diff_res.exit_code == 0
-        assert "=== Proposed Unified Diff ===" in diff_res.output
+        assert "=== Proposed Unified Diff" in diff_res.output
 
         # 6. Apply with --yes
         apply_res = runner.invoke(cli, ["apply", "--yes"])
@@ -73,3 +73,33 @@ def test_cli_init_check_diff_apply_doctor_workflow(tmp_path: Path):
         doc_json = runner.invoke(cli, ["doctor", "--json"])
         assert doc_json.exit_code == 0
         assert "CONFIGURATION" in doc_json.output
+
+
+def test_cli_scope_flags(tmp_path: Path):
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        runner.invoke(cli, ["init"])
+
+        # Check with explicit scope options
+        res_scope_proj = runner.invoke(cli, ["check", "--scope", "project"])
+        assert res_scope_proj.exit_code == 0
+        assert "Scope: project" in res_scope_proj.output
+
+        res_scope_glob = runner.invoke(cli, ["check", "--global"])
+        assert res_scope_glob.exit_code == 0
+        assert "Scope: global" in res_scope_glob.output
+
+        res_scope_all = runner.invoke(cli, ["diff", "--scope", "all"])
+        assert res_scope_all.exit_code == 0
+        assert "Scope: all" in res_scope_all.output
+
+
+def test_cli_malformed_policy_fails_cleanly(tmp_path: Path):
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        bad_policy = Path("howlalign.toml")
+        bad_policy.write_text("invalid = toml [ broken", encoding="utf-8")
+
+        res = runner.invoke(cli, ["check"])
+        assert res.exit_code == 1
+        assert "Failed to parse" in res.output or "Error" in res.output

@@ -3,10 +3,27 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import click
 
 from howlalign import __version__
+from howlalign.core.exceptions import (
+    HowlAlignError,
+)
+from howlalign.core.models import Scope
+
+
+def resolve_scope(is_global: bool, scope_opt: str | None) -> Scope:
+    """Resolve scope between --global flag and --scope option."""
+    if is_global:
+        return Scope.GLOBAL
+    if scope_opt:
+        try:
+            return Scope(scope_opt.lower())
+        except ValueError:
+            pass
+    return Scope.PROJECT
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
@@ -17,6 +34,7 @@ def cli() -> None:
     Aligns model preferences, specialized subagents, and workflow conventions
     across Claude Code, OpenAI Codex CLI, and Google Antigravity CLI (AGY).
     """
+    pass
 
 
 @cli.command("init")
@@ -50,6 +68,9 @@ def init_cmd(path: str | None, is_global: bool, force: bool) -> None:
         click.secho(f"Error: {err}", fg="red", err=True)
         click.echo("Use --force to overwrite an existing policy.")
         sys.exit(1)
+    except HowlAlignError as err:
+        click.secho(f"Configuration error: {err}", fg="red", err=True)
+        sys.exit(1)
     except Exception as err:
         click.secho(f"Error initializing policy: {err}", fg="red", err=True)
         sys.exit(1)
@@ -64,19 +85,40 @@ def init_cmd(path: str | None, is_global: bool, force: bool) -> None:
     help="Path to howlalign.toml policy.",
 )
 @click.option(
+    "--global",
+    "is_global",
+    is_flag=True,
+    default=False,
+    help="Target user global configuration instead of project workspace.",
+)
+@click.option(
+    "--scope",
+    "scope_opt",
+    type=click.Choice(["project", "global", "all"], case_sensitive=False),
+    default=None,
+    help="Explicitly specify target configuration scope.",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
     default=False,
     help="Output findings as JSON.",
 )
-def check_cmd(config_path: str | None, json_output: bool) -> None:
+def check_cmd(
+    config_path: str | None, is_global: bool, scope_opt: str | None, json_output: bool
+) -> None:
     """Read-only inspection of discovered providers, capabilities, and drift."""
     from howlalign.core.engine import AlignmentEngine
 
-    engine = AlignmentEngine(config_path=config_path)
-    exit_code = engine.check(json_output=json_output)
-    sys.exit(exit_code)
+    target_scope = resolve_scope(is_global, scope_opt)
+    try:
+        engine = AlignmentEngine(config_path=config_path, scope=target_scope)
+        exit_code = engine.check(json_output=json_output)
+        sys.exit(exit_code)
+    except HowlAlignError as err:
+        click.secho(f"Error: {err}", fg="red", err=True)
+        sys.exit(1)
 
 
 @cli.command("diff")
@@ -88,18 +130,39 @@ def check_cmd(config_path: str | None, json_output: bool) -> None:
     help="Path to howlalign.toml policy.",
 )
 @click.option(
+    "--global",
+    "is_global",
+    is_flag=True,
+    default=False,
+    help="Target user global configuration instead of project workspace.",
+)
+@click.option(
+    "--scope",
+    "scope_opt",
+    type=click.Choice(["project", "global", "all"], case_sensitive=False),
+    default=None,
+    help="Explicitly specify target configuration scope.",
+)
+@click.option(
     "--provider",
     type=click.Choice(["claude", "codex", "agy", "all"], case_sensitive=False),
     default="all",
     help="Filter diff to a specific provider.",
 )
-def diff_cmd(config_path: str | None, provider: str) -> None:
+def diff_cmd(
+    config_path: str | None, is_global: bool, scope_opt: str | None, provider: str
+) -> None:
     """Calculate and display proposed unified diffs for native configurations."""
     from howlalign.core.engine import AlignmentEngine
 
-    engine = AlignmentEngine(config_path=config_path)
-    exit_code = engine.diff(provider_filter=provider)
-    sys.exit(exit_code)
+    target_scope = resolve_scope(is_global, scope_opt)
+    try:
+        engine = AlignmentEngine(config_path=config_path, scope=target_scope)
+        exit_code = engine.diff(provider_filter=provider)
+        sys.exit(exit_code)
+    except HowlAlignError as err:
+        click.secho(f"Error: {err}", fg="red", err=True)
+        sys.exit(1)
 
 
 @cli.command("apply")
@@ -109,6 +172,20 @@ def diff_cmd(config_path: str | None, provider: str) -> None:
     type=click.Path(exists=True, dir_okay=False),
     default=None,
     help="Path to howlalign.toml policy.",
+)
+@click.option(
+    "--global",
+    "is_global",
+    is_flag=True,
+    default=False,
+    help="Target user global configuration instead of project workspace.",
+)
+@click.option(
+    "--scope",
+    "scope_opt",
+    type=click.Choice(["project", "global", "all"], case_sensitive=False),
+    default=None,
+    help="Explicitly specify target configuration scope.",
 )
 @click.option(
     "--provider",
@@ -129,32 +206,51 @@ def diff_cmd(config_path: str | None, provider: str) -> None:
     default=False,
     help="Skip creating backup copies before applying changes (not recommended).",
 )
-def apply_cmd(config_path: str | None, provider: str, yes: bool, no_backup: bool) -> None:
+def apply_cmd(
+    config_path: str | None,
+    is_global: bool,
+    scope_opt: str | None,
+    provider: str,
+    yes: bool,
+    no_backup: bool,
+) -> None:
     """Apply explicitly approved configuration changes with backups and revalidation."""
     from howlalign.core.engine import AlignmentEngine
 
-    engine = AlignmentEngine(config_path=config_path)
-    exit_code = engine.apply(provider_filter=provider, auto_approve=yes, backup=not no_backup)
-    sys.exit(exit_code)
+    target_scope = resolve_scope(is_global, scope_opt)
+    try:
+        engine = AlignmentEngine(config_path=config_path, scope=target_scope)
+        exit_code = engine.apply(provider_filter=provider, auto_approve=yes, backup=not no_backup)
+        sys.exit(exit_code)
+    except HowlAlignError as err:
+        click.secho(f"Error: {err}", fg="red", err=True)
+        sys.exit(1)
 
 
 @cli.command("restore")
 @click.argument("backup_dir", type=click.Path(exists=True, file_okay=False, dir_okay=True))
-def restore_cmd(backup_dir: str) -> None:
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Force restore even if target files have drifted since apply.",
+)
+def restore_cmd(backup_dir: str, force: bool) -> None:
     """Restore configuration files from a backup directory."""
-    from pathlib import Path
-
     from howlalign.core.writer import ConfigWriter
 
     writer = ConfigWriter()
-    res = writer.restore_backup(Path(backup_dir))
+    res = writer.restore_backup(Path(backup_dir), force=force)
     if res.success:
         click.secho(f"✓ Successfully restored configuration from {backup_dir}!", fg="green")
         for f in res.applied_files:
             click.echo(f"  - {f}")
         sys.exit(0)
     else:
-        click.secho(f"✗ Failed to restore backup: {res.errors}", fg="red", err=True)
+        click.secho("✗ Failed to restore backup:", fg="red", err=True)
+        for err in res.errors:
+            click.secho(f"  - {err}", fg="red", err=True)
         sys.exit(1)
 
 
@@ -167,18 +263,42 @@ def restore_cmd(backup_dir: str) -> None:
     help="Path to howlalign.toml policy.",
 )
 @click.option(
+    "--global",
+    "is_global",
+    is_flag=True,
+    default=False,
+    help="Target user global configuration instead of project workspace.",
+)
+@click.option(
+    "--scope",
+    "scope_opt",
+    type=click.Choice(["project", "global", "all"], case_sensitive=False),
+    default=None,
+    help="Explicitly specify target configuration scope.",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
     default=False,
     help="Output diagnostics as JSON.",
 )
-def doctor_cmd(config_path: str | None, json_output: bool) -> None:
+def doctor_cmd(
+    config_path: str | None,
+    is_global: bool,
+    scope_opt: str | None,
+    json_output: bool,
+) -> None:
     """Validate configuration health, security boundaries, and provider compatibility."""
     from howlalign.core.doctor import run_doctor
 
-    exit_code = run_doctor(config_path=config_path, json_output=json_output)
-    sys.exit(exit_code)
+    target_scope = resolve_scope(is_global, scope_opt)
+    try:
+        exit_code = run_doctor(config_path=config_path, json_output=json_output, scope=target_scope)
+        sys.exit(exit_code)
+    except HowlAlignError as err:
+        click.secho(f"Error: {err}", fg="red", err=True)
+        sys.exit(1)
 
 
 def main() -> None:

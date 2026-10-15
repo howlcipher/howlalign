@@ -51,20 +51,28 @@ howlalign init
 Check discovered providers and current configuration alignment without modifying any files:
 
 ```bash
+# Project workspace inspection
 howlalign check
+
+# Global user-level configuration inspection
+howlalign check --scope global
+
+# Aggregate inspection across all scopes
+howlalign check --scope all
 ```
 
 ### 3. Preview Diffs
 
-Inspect the exact unified diffs HowlAlign proposes applying to native provider configurations:
+Inspect the exact unified diffs HowlAlign proposes applying to native provider configurations (sensitive credentials automatically masked):
 
 ```bash
 howlalign diff
+howlalign diff --scope global
 ```
 
 ### 4. Apply Changes Safely
 
-Apply the configuration with automatic backup creation:
+Apply the configuration with automatic, isolated backups in `$XDG_STATE_HOME/howlalign/backups/`:
 
 ```bash
 howlalign apply
@@ -76,12 +84,24 @@ To run non-interactively in automated pipelines:
 howlalign apply --yes
 ```
 
-### 5. Diagnostics
+### 5. Restore from Backup
 
-Run configuration and security diagnostics:
+Revert applied changes safely using a timestamped backup directory:
+
+```bash
+howlalign restore ~/.local/state/howlalign/backups/<backup_folder>
+
+# Overwrite even if files have drifted after apply
+howlalign restore ~/.local/state/howlalign/backups/<backup_folder> --force
+```
+
+### 6. Diagnostics
+
+Run configuration, rule budget, and security diagnostics:
 
 ```bash
 howlalign doctor
+howlalign doctor --scope all
 ```
 
 ---
@@ -89,10 +109,14 @@ howlalign doctor
 ## Security Guarantees
 
 HowlAlign operates under strict configuration safety rules:
-- **Zero Unrelated Overwrite:** Preserves existing unrelated settings in JSON and TOML configuration files.
+- **User Provenance Protection:** Automatically tags and preserves user-authored subagents and rules lacking HowlAlign provenance markers.
+- **Fail-Closed Parsing:** Halts with explicit `ConfigurationParseError` rather than resetting or corrupting malformed configurations.
+- **Dedicated Private Backups:** Backups are stored in user-private XDG state locations with restrictive permissions (`0o700` directories, `0o600` files), preventing accidental git commits.
+- **Target Drift Detection:** Restore operations refuse to overwrite target files that have drifted after apply unless `--force` is specified.
+- **Atomic Operations & Permission Preservation:** Writes target configurations through atomic temporary replacements, preserving file modes on existing configurations.
+- **Secret Isolation & Masking:** Sensitive credentials, tokens, and authorization headers are masked in all diff previews and diagnostics.
+- **Zero Unrelated Overwrite:** Preserves existing unrelated settings and tables in JSON and TOML configuration files.
 - **No Silent Permission Bypasses:** Never enables `--dangerously-skip-permissions` or unrestricted sandbox bypasses without explicit user policy intent.
-- **Secret Isolation:** Never reads, prints, or exports credentials, tokens, or API keys.
-- **Atomic Operations:** Writes target configurations through atomic file replacements with verified backups.
 - **Isolated Testing:** Integration and unit tests run in hermetic, disposable fixture directories.
 
 ---

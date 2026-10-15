@@ -19,6 +19,7 @@ from howlalign.core.models import (
     ConfigChange,
     ProviderInfo,
     ProviderType,
+    Scope,
 )
 from howlalign.core.policy import discover_policy_file, get_default_policy, load_policy_file
 from howlalign.core.writer import ConfigWriter
@@ -32,9 +33,12 @@ class AlignmentEngine:
         config_path: str | Path | None = None,
         workspace_dir: Path | None = None,
         home_dir: Path | None = None,
+        scope: Scope = Scope.PROJECT,
     ) -> None:
         self.workspace = (workspace_dir or Path.cwd()).resolve()
         self.home = (home_dir or Path.home()).resolve()
+        self.scope = scope
+        self.is_global = scope == Scope.GLOBAL
 
         # Locate policy
         resolved_policy_path = discover_policy_file(config_path)
@@ -61,33 +65,49 @@ class AlignmentEngine:
     def generate_all_changes(
         self,
         provider_filter: str = "all",
-        is_global: bool = False,
+        is_global: bool | None = None,
     ) -> list[ConfigChange]:
-        """Generate planned configuration changes across all enabled providers."""
+        """Generate planned configuration changes across all enabled providers and scopes."""
         changes: list[ConfigChange] = []
         target_filter = provider_filter.lower()
 
-        for prov_type in self.policy.enabled_providers:
-            if target_filter != "all" and prov_type.value != target_filter:
-                continue
+        # If is_global not explicitly overridden, derive from scope
+        target_global_flags: list[bool] = []
+        if is_global is not None:
+            target_global_flags = [is_global]
+        elif self.scope == Scope.ALL:
+            target_global_flags = [False, True]
+        else:
+            target_global_flags = [self.scope == Scope.GLOBAL]
 
-            adapter = self.adapters.get(prov_type)
-            if adapter:
-                changes.extend(adapter.generate_changes(self.policy, is_global=is_global))
+        for flag in target_global_flags:
+            for prov_type in self.policy.enabled_providers:
+                if target_filter != "all" and prov_type.value != target_filter:
+                    continue
+
+                adapter = self.adapters.get(prov_type)
+                if adapter:
+                    changes.extend(adapter.generate_changes(self.policy, is_global=flag))
 
         return changes
 
     def check(self, json_output: bool = False) -> int:
         """Inspect providers, capabilities, and drift without modifications."""
         providers = self.get_providers_info()
-        changes = self.generate_all_changes(is_global=False)
+        changes = self.generate_all_changes()
 
-        drift_files = [c for c in changes if c.original_content != c.proposed_content]
+        drift_files = [
+            c
+            for c in changes
+            if c.original_content != c.proposed_content and not c.is_user_owned_conflict
+        ]
+        conflict_files = [c for c in changes if c.is_user_owned_conflict]
 
         if json_output:
             data = {
                 "policy_path": str(self.policy_path) if self.policy_path else None,
                 "policy_schema_version": self.policy.schema_version,
+                "scope": self.scope.value,
                 "providers": {
                     p.value: {
                         "installed": info.installed,
@@ -100,11 +120,13 @@ class AlignmentEngine:
                 },
                 "drift_count": len(drift_files),
                 "drift_files": [str(c.file_path) for c in drift_files],
+                "conflict_count": len(conflict_files),
+                "conflict_files": [str(c.file_path) for c in conflict_files],
             }
             click.echo(json.dumps(data, indent=2))
             return 0
 
-        click.echo("=== HowlAlign Provider Inspection ===")
+        click.echo(f"=== HowlAlign Provider Inspection [Scope: {self.scope.value}] ===")
         if self.policy_path:
             click.echo(f"Active Policy: {self.policy_path} (schema v{self.policy.schema_version})")
         else:
@@ -128,7 +150,15 @@ class AlignmentEngine:
                 click.echo(f"  Unsupported notes: {', '.join(info.unsupported_features)}")
 
         click.echo("")
-        click.echo("=== Configuration Drift ===")
+        click.echo("=== Configuration Drift & Conflicts ===")
+        if conflict_files:
+            click.secho(
+                f"Found {len(conflict_files)} user-authored file(s) preserved without modification:",
+                fg="cyan",
+            )
+            for c in conflict_files:
+                click.echo(f"  [PRESERVED] {c.file_path} ({c.provider.value})")
+
         if not drift_files:
             click.secho("✓ All enabled providers are fully aligned with policy.", fg="green")
         else:
@@ -143,14 +173,16 @@ class AlignmentEngine:
     def diff(self, provider_filter: str = "all") -> int:
         """Calculate and display exact unified diffs."""
         changes = self.generate_all_changes(provider_filter=provider_filter)
-        diff_res = Differ.compute_diff(changes)
+        diff_res = Differ.compute_diff(changes, workspace_root=self.workspace)
 
-        if not diff_res.unified_diff:
+        if not diff_res.unified_diff and not diff_res.has_conflicts:
             click.secho("No configuration changes needed. Configurations are aligned.", fg="green")
             return 0
 
-        click.echo("=== Proposed Unified Diff ===")
-        click.echo(diff_res.unified_diff)
+        if diff_res.unified_diff:
+            click.echo(f"=== Proposed Unified Diff [Scope: {self.scope.value}] ===")
+            click.echo(diff_res.unified_diff)
+
         click.echo("\n=== Summary ===")
         click.echo(diff_res.summary)
         return 0
@@ -163,15 +195,20 @@ class AlignmentEngine:
     ) -> int:
         """Apply approved changes with revalidation and backups."""
         changes = self.generate_all_changes(provider_filter=provider_filter)
-        drift_files = [c for c in changes if c.original_content != c.proposed_content]
+        # Filter out user-owned conflicts and no-op changes
+        actionable_changes = [
+            c
+            for c in changes
+            if c.original_content != c.proposed_content and not c.is_user_owned_conflict
+        ]
 
-        if not drift_files:
+        if not actionable_changes:
             click.secho(
                 "No changes needed. All provider configurations are already aligned.", fg="green"
             )
             return 0
 
-        diff_res = Differ.compute_diff(drift_files)
+        diff_res = Differ.compute_diff(actionable_changes, workspace_root=self.workspace)
         click.echo("=== Changes to Apply ===")
         click.echo(diff_res.summary)
         click.echo("")
@@ -193,7 +230,7 @@ class AlignmentEngine:
                 return 0
 
         click.echo("Applying configuration changes...")
-        result: ApplyResult = self.writer.apply(drift_files, create_backup=backup)
+        result: ApplyResult = self.writer.apply(actionable_changes, create_backup=backup)
 
         if result.success:
             click.secho("✓ Successfully aligned configuration!", fg="green")
@@ -207,4 +244,9 @@ class AlignmentEngine:
             click.secho("✗ Failed to apply configuration changes!", fg="red", err=True)
             for err in result.errors:
                 click.secho(f"  Error: {err}", fg="red", err=True)
+            if result.rolled_back:
+                click.secho(
+                    "  [ROLLBACK] All partially applied files were reverted successfully.",
+                    fg="yellow",
+                )
             return 1

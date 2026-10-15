@@ -17,24 +17,29 @@ from howlalign.core.models import (
     DiagnosticItem,
     ProviderType,
     SandboxMode,
+    Scope,
 )
 from howlalign.core.policy import discover_policy_file, get_default_policy, load_policy_file
 
-SECRET_KEY_PATTERNS = [
+# Matches assignment of credentials, e.g. api_key = "sk-..." or Bearer tokens
+SECRET_ASSIGNMENT_PATTERNS = [
     re.compile(
-        r"(api[_-]?key|access[_-]?token|secret[_-]?key|password|bearer\s+[a-zA-Z0-9_\-\.]+)",
+        r'(?:api[_-]?key|access[_-]?token|secret[_-]?key|password)\s*[:=]\s*["\']([^"\']{6,})["\']',
         re.IGNORECASE,
-    )
+    ),
+    re.compile(r"bearer\s+([a-zA-Z0-9_\-\.]{12,})", re.IGNORECASE),
 ]
 
 
 def check_for_leaked_secrets(content: str) -> list[str]:
-    """Scan text for suspected secrets or credentials."""
+    """Scan text for suspected credential assignments, returning masked descriptions."""
     findings: list[str] = []
-    for pattern in SECRET_KEY_PATTERNS:
-        matches = pattern.findall(content)
-        if matches:
-            findings.append(f"Suspicious secret keyword detected: {matches[0]}")
+    for pattern in SECRET_ASSIGNMENT_PATTERNS:
+        for match in pattern.finditer(content):
+            val = match.group(1)
+            # Mask the secret value
+            masked = val[:2] + "*" * 6 + "[REDACTED]"
+            findings.append(f"Secret pattern matched with value '{masked}'")
     return findings
 
 
@@ -46,9 +51,12 @@ class Doctor:
         config_path: str | Path | None = None,
         workspace_dir: Path | None = None,
         home_dir: Path | None = None,
+        scope: Scope = Scope.PROJECT,
     ) -> None:
         self.workspace = (workspace_dir or Path.cwd()).resolve()
         self.home = (home_dir or Path.home()).resolve()
+        self.scope = scope
+        self.is_global = scope == Scope.GLOBAL
 
         self.policy_path = discover_policy_file(config_path)
         if self.policy_path:
@@ -97,7 +105,7 @@ class Doctor:
                 DiagnosticItem(
                     severity="INFO",
                     category="CONFIGURATION",
-                    message=f"Policy loaded from {self.policy_path} (schema v{self.policy.schema_version}).",
+                    message=f"Policy loaded from {self.policy_path} (schema v{self.policy.schema_version}, scope: {self.scope.value}).",
                 )
             )
 
@@ -142,7 +150,7 @@ class Doctor:
             info = providers_info.get(prov_type)
             adapter = self.adapters.get(prov_type)
             if info and adapter:
-                items.extend(adapter.check_health(self.policy, info, is_global=False))
+                items.extend(adapter.check_health(self.policy, info, is_global=self.is_global))
 
         return items
 
@@ -152,9 +160,15 @@ def run_doctor(
     json_output: bool = False,
     workspace_dir: Path | None = None,
     home_dir: Path | None = None,
+    scope: Scope = Scope.PROJECT,
 ) -> int:
     """Execute doctor command and format output."""
-    doctor = Doctor(config_path=config_path, workspace_dir=workspace_dir, home_dir=home_dir)
+    doctor = Doctor(
+        config_path=config_path,
+        workspace_dir=workspace_dir,
+        home_dir=home_dir,
+        scope=scope,
+    )
     items = doctor.run_diagnostics()
 
     has_errors = any(i.severity == "ERROR" for i in items)
@@ -173,7 +187,7 @@ def run_doctor(
         click.echo(json.dumps(data, indent=2))
         return 1 if has_errors else 0
 
-    click.echo("=== HowlAlign Doctor Diagnostics ===\n")
+    click.echo(f"=== HowlAlign Doctor Diagnostics [Scope: {scope.value}] ===\n")
 
     for item in items:
         if item.severity == "ERROR":

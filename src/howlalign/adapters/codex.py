@@ -8,7 +8,9 @@ from typing import Any
 
 import toml
 
-from howlalign.adapters.base import BaseAdapter
+from howlalign.adapters.base import BaseAdapter, is_file_managed_by_howlalign, safe_read_text
+from howlalign.core.constants import MANAGED_BY_MARKER_TOML
+from howlalign.core.exceptions import ConfigurationParseError
 from howlalign.core.models import (
     ApprovalPolicy,
     ConfigChange,
@@ -44,14 +46,15 @@ class CodexAdapter(BaseAdapter):
         self,
         policy: Policy,
         existing_content: str | None,
+        cfg_path: Path,
         is_global: bool,
     ) -> str:
         data: dict[str, Any] = {}
-        if existing_content:
+        if existing_content and existing_content.strip():
             try:
                 data = toml.loads(existing_content)
-            except Exception:
-                data = {}
+            except Exception as err:
+                raise ConfigurationParseError(cfg_path, "TOML", err) from err
 
         # 1. Model resolution
         impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
@@ -67,6 +70,13 @@ class CodexAdapter(BaseAdapter):
         if support_role:
             data["default_subagent_model"] = support_role.codex_model
             data["default_subagent_reasoning_effort"] = support_role.effort.value
+
+        # Honor explicit provider overrides
+        codex_overrides = policy.overrides.get("codex", {})
+        if "model_reasoning_effort" in codex_overrides:
+            data["model_reasoning_effort"] = codex_overrides["model_reasoning_effort"]
+        if "plan_mode_reasoning_effort" in codex_overrides:
+            data["plan_mode_reasoning_effort"] = codex_overrides["plan_mode_reasoning_effort"]
 
         # 2. Sandbox mode
         if policy.permissions.sandbox == SandboxMode.READ_ONLY:
@@ -84,17 +94,23 @@ class CodexAdapter(BaseAdapter):
             data["approval_policy"] = "on-request"
             data["approvals_reviewer"] = "user"
 
-        # 4. Custom agents table
+        # 4. Custom agents table with relative paths for project scope
         agents_table = data.setdefault("agents", {})
-        agents_dir = self._get_agents_dir(is_global)
         for agent_name, agent_cfg in policy.agents.items():
             if not agent_cfg.enabled:
                 continue
-            role_file = agents_dir / f"{agent_name}.toml"
-            agents_table[agent_name] = {
-                "description": agent_cfg.description,
-                "config_file": str(role_file),
-            }
+
+            # In project scope, use portable relative path: .codex/agents/<name>.toml
+            config_file_ref = (
+                f".codex/agents/{agent_name}.toml"
+                if not is_global
+                else str(self._get_agents_dir(True) / f"{agent_name}.toml")
+            )
+
+            # Preserve any existing user-configured agent settings while aligning core descriptor
+            agent_entry = agents_table.setdefault(agent_name, {})
+            agent_entry["description"] = agent_cfg.description
+            agent_entry["config_file"] = config_file_ref
 
         return toml.dumps(data)
 
@@ -105,8 +121,10 @@ class CodexAdapter(BaseAdapter):
         prompt: str,
         model: str,
         effort: str,
+        read_only: bool = False,
     ) -> str:
-        role_data = {
+        role_data: dict[str, Any] = {
+            "managed_by": "howlalign",
             "name": name,
             "description": description,
             "developer_instructions": prompt.strip(),
@@ -114,7 +132,10 @@ class CodexAdapter(BaseAdapter):
             "model_reasoning_effort": effort,
             "nickname_candidates": [name, f"{name}-agent"],
         }
-        return toml.dumps(role_data)
+        if read_only:
+            role_data["sandbox_mode"] = "read-only"
+
+        return f"# {MANAGED_BY_MARKER_TOML}\n" + toml.dumps(role_data)
 
     def generate_changes(
         self,
@@ -125,8 +146,8 @@ class CodexAdapter(BaseAdapter):
 
         # 1. config.toml
         cfg_path = self._get_target_config_path(is_global)
-        existing_cfg = cfg_path.read_text(encoding="utf-8") if cfg_path.is_file() else None
-        proposed_cfg = self._generate_config_content(policy, existing_cfg, is_global)
+        existing_cfg = safe_read_text(cfg_path)
+        proposed_cfg = self._generate_config_content(policy, existing_cfg, cfg_path, is_global)
 
         changes.append(
             ConfigChange(
@@ -146,9 +167,24 @@ class CodexAdapter(BaseAdapter):
                 continue
 
             role_file = agents_dir / f"{agent_name}.toml"
-            existing_role = role_file.read_text(encoding="utf-8") if role_file.is_file() else None
+            existing_role = safe_read_text(role_file)
 
-            # Pick appropriate model for agent
+            # Conflict Detection: Preserve user-authored agent files
+            if existing_role is not None and not is_file_managed_by_howlalign(
+                existing_role, "toml"
+            ):
+                changes.append(
+                    ConfigChange(
+                        file_path=role_file,
+                        original_content=existing_role,
+                        proposed_content=existing_role,
+                        description=f"User-authored Codex agent role '{agent_name}' detected. Preserved without modification.",
+                        provider=ProviderType.CODEX,
+                        is_user_owned_conflict=True,
+                    )
+                )
+                continue
+
             agent_role_class = agent_cfg.model_role
             role_cfg = policy.roles.get(agent_role_class)
             model = role_cfg.codex_model if role_cfg else "gpt-6.1-sol"
@@ -160,6 +196,7 @@ class CodexAdapter(BaseAdapter):
                 prompt=agent_cfg.system_prompt,
                 model=model,
                 effort=effort,
+                read_only=agent_cfg.read_only,
             )
 
             changes.append(
@@ -176,12 +213,11 @@ class CodexAdapter(BaseAdapter):
         # 3. AGENTS.md (at repository root if project level)
         if not is_global:
             agents_md_path = self.workspace / "AGENTS.md"
-            existing_agents_md = (
-                agents_md_path.read_text(encoding="utf-8") if agents_md_path.is_file() else None
-            )
+            existing_agents_md = safe_read_text(agents_md_path)
 
             if existing_agents_md is None:
                 proposed_agents_md = f"""# AGENTS.md
+<!-- {MANAGED_BY_MARKER_TOML} -->
 
 Repository engineering conventions aligned via HowlAlign (policy v{policy.schema_version}).
 
@@ -233,28 +269,49 @@ Repository engineering conventions aligned via HowlAlign (policy v{policy.schema
             )
         )
 
+        # Check existing config syntax validity
+        cfg_path = self._get_target_config_path(is_global)
+        if cfg_path.is_file():
+            content = safe_read_text(cfg_path)
+            if content and content.strip():
+                try:
+                    toml.loads(content)
+                except Exception as err:
+                    items.append(
+                        DiagnosticItem(
+                            severity="ERROR",
+                            category="CONFIGURATION",
+                            message=f"Existing Codex config at '{cfg_path}' is malformed TOML: {err}",
+                            provider="codex",
+                            action="Repair syntax in config.toml to enable alignment.",
+                        )
+                    )
+
         # Check repository trust requirement for project configs
         if not is_global:
-            user_config_path = self.home / ".codex" / "config.toml"
+            codex_home = Path(os.environ.get("CODEX_HOME", str(self.home / ".codex")))
+            user_config_path = codex_home / "config.toml"
             workspace_str = str(self.workspace)
             trusted = False
             if user_config_path.is_file():
-                try:
-                    u_data = toml.loads(user_config_path.read_text(encoding="utf-8"))
-                    projects = u_data.get("projects", {})
-                    if projects.get(workspace_str, {}).get("trust_level") == "trusted":
-                        trusted = True
-                except Exception:
-                    pass
+                content = safe_read_text(user_config_path)
+                if content and content.strip():
+                    try:
+                        u_data = toml.loads(content)
+                        projects = u_data.get("projects", {})
+                        if projects.get(workspace_str, {}).get("trust_level") == "trusted":
+                            trusted = True
+                    except Exception:
+                        pass
 
             if not trusted:
                 items.append(
                     DiagnosticItem(
                         severity="WARNING",
                         category="SECURITY",
-                        message=f"Project {self.workspace} is not marked as trusted in ~/.codex/config.toml. Codex CLI will ignore project-level .codex/config.toml until trusted.",
+                        message=f"Project '{self.workspace}' is not marked as trusted in user config. Codex CLI will ignore project-level .codex/config.toml until trusted.",
                         provider="codex",
-                        action=f'Add [projects."{workspace_str}"] trust_level = "trusted" to ~/.codex/config.toml.',
+                        action=f'Add [projects."{workspace_str}"] trust_level = "trusted" to {user_config_path}.',
                     )
                 )
 

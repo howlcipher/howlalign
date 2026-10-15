@@ -98,9 +98,11 @@ HowlAlign models configuration across three tiers:
 
 Configuration files control critical developer tool behavior. HowlAlign enforces strict security guarantees:
 
-1. **Preservation-Aware Updates:** When modifying JSON or TOML configurations, unrelated keys, tables, and settings are preserved.
-2. **Atomic Writes:** File updates are written to hidden temporary files in the target directory and atomically swapped using `os.replace` after `os.fsync`.
-3. **Pre-Write Revalidation (Anti-TOCTOU):** The SHA-256 fingerprint of each file on disk is validated against the fingerprint recorded when the diff was generated. If a file was modified concurrently, the operation immediately aborts.
-4. **Timestamped Backups & Rollback:** Backups are written to `.howlalign/backups/<timestamp>/` with an explicit `manifest.json`. If any write in a multi-file batch fails, all applied changes are restored immediately.
-5. **Path Traversal & Symlink Protection:** Target file paths are strictly validated to reside within the workspace or user home root. Unsafe symlinks pointing outside allowed boundaries raise `PermissionError`.
-6. **Credential Masking:** Diagnostic routines scan configuration and policy files for accidental secrets and mask sensitive strings in terminal output.
+1. **Preservation-Aware Updates & Provenance Tracking:** When modifying JSON or TOML configurations, unrelated keys, tables, and settings are preserved. User-authored custom agents and guidelines lacking HowlAlign provenance markers are detected as conflicts and protected from overwrite.
+2. **Atomic Writes & Permission Preservation:** File updates are written to hidden temporary files in the target directory, permissions are preserved on existing files, and atomically swapped using `os.replace` after `os.fsync`.
+3. **Pre-Write Revalidation (Anti-TOCTOU):** The SHA-256 fingerprint of each file on disk is validated against the fingerprint recorded when the diff was generated. If a file was modified concurrently, the operation immediately aborts without touching remaining files.
+4. **User-Private Backups & Scoped Rollback:** Backups are written outside repositories into `$XDG_STATE_HOME/howlalign/backups/<workspace_id>/<timestamp>/` (defaulting to `~/.local/state/howlalign/backups/`) with restrictive permissions (`0o700` for directories, `0o600` for files and manifests). If an apply batch fails mid-process, in-memory or manifest-backed rollback restores previous state cleanly.
+5. **Restore Safety & Drift Conflict Detection:** Restore validates manifest paths, enforces containment within authorized workspace/home roots, and verifies that target files have not drifted since apply. Post-apply modifications require `--force` to overwrite. Unmanaged files created during apply are safely reverted.
+6. **Path Traversal & Symlink Protection:** Target file paths and symlink parent chains are strictly validated against authorized roots, raising `PathTraversalError` or `UnsafeSymlinkError` upon violation.
+7. **Fail-Closed Configuration Safety:** Malformed existing configurations immediately halt alignment with `ConfigurationParseError` rather than resetting or wiping user settings.
+8. **Credential Masking:** Diagnostic routines and unified diff previews mask API keys, tokens, and authorization headers to prevent accidental leakage in console logs or pull requests.

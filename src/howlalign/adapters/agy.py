@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from howlalign.adapters.base import BaseAdapter
+from howlalign.adapters.base import BaseAdapter, is_file_managed_by_howlalign, safe_read_text
+from howlalign.core.constants import (
+    AGY_MAX_AGGREGATE_RULE_BYTES,
+    AGY_MAX_RULE_BYTES,
+    MANAGED_BY_MARKER_MD,
+)
+from howlalign.core.exceptions import ConfigurationParseError
 from howlalign.core.models import (
     ApprovalPolicy,
     ConfigChange,
@@ -35,18 +41,24 @@ class AgyAdapter(BaseAdapter):
         self,
         policy: Policy,
         existing_content: str | None,
+        settings_path: Path,
     ) -> str:
         data: dict[str, Any] = {}
-        if existing_content:
+        if existing_content and existing_content.strip():
             try:
                 data = json.loads(existing_content)
-            except Exception:
-                data = {}
+            except Exception as err:
+                raise ConfigurationParseError(settings_path, "JSON", err) from err
 
-        # Default model
+        # Implementation model default
         impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
         if impl_role:
             data["model"] = impl_role.agy_model
+
+        # Planning role mapping
+        plan_role = policy.roles.get(RoleClass.PLANNING)
+        if plan_role:
+            data["planningModel"] = plan_role.agy_model
 
         # Permissions mode
         if policy.permissions.ask_approval == ApprovalPolicy.NEVER:
@@ -55,6 +67,13 @@ class AgyAdapter(BaseAdapter):
             data["toolPermission"] = "request-review"
         else:
             data["toolPermission"] = "proceed-in-sandbox"
+
+        # Apply overrides
+        agy_overrides = policy.overrides.get("agy", {})
+        if "mode" in agy_overrides:
+            data["mode"] = agy_overrides["mode"]
+        if "toolPermission" in agy_overrides:
+            data["toolPermission"] = agy_overrides["toolPermission"]
 
         return json.dumps(data, indent=2) + "\n"
 
@@ -65,11 +84,13 @@ class AgyAdapter(BaseAdapter):
         prompt: str,
     ) -> str:
         return f"""---
+managed_by: howlalign
 name: {name}
 description: >-
   {description}
 ---
 
+<!-- {MANAGED_BY_MARKER_MD} -->
 # {name.capitalize()} Skill
 
 {prompt.strip()}
@@ -80,17 +101,21 @@ description: >-
         name: str,
         description: str,
         prompt: str,
-        model: str = "gemini-3.8-flash-high",
+        model: str,
+        read_only: bool = False,
     ) -> str:
+        disallowed_block = 'disallowedTools: ["Edit", "Write"]\n' if read_only else ""
         return f"""---
+managed_by: howlalign
 name: {name}
 description: >-
   {description}
 mainAgent: false
 subagent: true
 model: {model}
----
+{disallowed_block}---
 
+<!-- {MANAGED_BY_MARKER_MD} -->
 # {name.capitalize()} Agent
 
 {prompt.strip()}
@@ -106,10 +131,8 @@ model: {model}
         if is_global:
             # Global settings.json
             settings_path = self._get_global_settings_path()
-            existing = (
-                settings_path.read_text(encoding="utf-8") if settings_path.is_file() else None
-            )
-            proposed = self._generate_global_settings(policy, existing)
+            existing = safe_read_text(settings_path)
+            proposed = self._generate_global_settings(policy, existing, settings_path)
             changes.append(
                 ConfigChange(
                     file_path=settings_path,
@@ -131,9 +154,24 @@ model: {model}
                 continue
 
             skill_file = agents_root / "skills" / agent_name / "SKILL.md"
-            existing_skill = (
-                skill_file.read_text(encoding="utf-8") if skill_file.is_file() else None
-            )
+            existing_skill = safe_read_text(skill_file)
+
+            # Conflict Detection: Avoid overwriting user-authored skills
+            if existing_skill is not None and not is_file_managed_by_howlalign(
+                existing_skill, "md"
+            ):
+                changes.append(
+                    ConfigChange(
+                        file_path=skill_file,
+                        original_content=existing_skill,
+                        proposed_content=existing_skill,
+                        description=f"User-authored AGY skill '{agent_name}' detected. Preserved without modification.",
+                        provider=ProviderType.AGY,
+                        is_user_owned_conflict=True,
+                    )
+                )
+                continue
+
             proposed_skill = self._generate_skill_markdown(
                 name=agent_name,
                 description=agent_cfg.description,
@@ -157,9 +195,24 @@ model: {model}
                 continue
 
             agent_file = agents_root / "agents" / agent_name / "agent.md"
-            existing_agent = (
-                agent_file.read_text(encoding="utf-8") if agent_file.is_file() else None
-            )
+            existing_agent = safe_read_text(agent_file)
+
+            # Conflict Detection: Avoid overwriting user-authored subagents
+            if existing_agent is not None and not is_file_managed_by_howlalign(
+                existing_agent, "md"
+            ):
+                changes.append(
+                    ConfigChange(
+                        file_path=agent_file,
+                        original_content=existing_agent,
+                        proposed_content=existing_agent,
+                        description=f"User-authored AGY agent '{agent_name}' detected. Preserved without modification.",
+                        provider=ProviderType.AGY,
+                        is_user_owned_conflict=True,
+                    )
+                )
+                continue
+
             role_cfg = policy.roles.get(agent_cfg.model_role)
             model_slug = role_cfg.agy_model if role_cfg else "gemini-3.8-flash-high"
 
@@ -168,6 +221,7 @@ model: {model}
                 description=agent_cfg.description,
                 prompt=agent_cfg.system_prompt,
                 model=model_slug,
+                read_only=agent_cfg.read_only,
             )
 
             changes.append(
@@ -183,12 +237,11 @@ model: {model}
 
         # 3. GEMINI.md in workspace root
         gemini_md_path = self.workspace / "GEMINI.md"
-        existing_gemini_md = (
-            gemini_md_path.read_text(encoding="utf-8") if gemini_md_path.is_file() else None
-        )
+        existing_gemini_md = safe_read_text(gemini_md_path)
 
         if existing_gemini_md is None:
             proposed_gemini_md = f"""# Workspace Rules (Aligned via HowlAlign)
+<!-- {MANAGED_BY_MARKER_MD} -->
 
 This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
 
@@ -240,18 +293,58 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
             )
         )
 
-        # Check rule file size limit if GEMINI.md exists
-        gemini_md = self.workspace / "GEMINI.md"
-        if gemini_md.is_file():
-            size = gemini_md.stat().st_size
-            if size > 24000:
+        # Validate syntax of existing settings.json
+        settings_path = self._get_global_settings_path()
+        if settings_path.is_file():
+            content = safe_read_text(settings_path)
+            if content and content.strip():
+                try:
+                    json.loads(content)
+                except Exception as err:
+                    items.append(
+                        DiagnosticItem(
+                            severity="ERROR",
+                            category="CONFIGURATION",
+                            message=f"Existing AGY settings file at '{settings_path}' is malformed JSON: {err}",
+                            provider="agy",
+                            action="Repair syntax in settings.json to enable alignment.",
+                        )
+                    )
+
+        # Comprehensive rule file budget check across all candidate rule files
+        if not is_global:
+            rule_candidates = [
+                self.workspace / "GEMINI.md",
+                self.workspace / "AGENTS.md",
+            ]
+            rules_dir = self.workspace / ".agents" / "rules"
+            if rules_dir.is_dir():
+                rule_candidates.extend(rules_dir.glob("*.md"))
+
+            total_rule_bytes = 0
+            for rf in rule_candidates:
+                if rf.is_file():
+                    size = rf.stat().st_size
+                    total_rule_bytes += size
+                    if size > AGY_MAX_RULE_BYTES:
+                        items.append(
+                            DiagnosticItem(
+                                severity="ERROR",
+                                category="COMPATIBILITY",
+                                message=f"Rule file '{rf.name}' ({size} bytes) exceeds AGY 24 KB limit and will be truncated by CLI.",
+                                provider="agy",
+                                action="Reduce rule size below 24,000 bytes or convert to a skill.",
+                            )
+                        )
+
+            if total_rule_bytes > AGY_MAX_AGGREGATE_RULE_BYTES:
                 items.append(
                     DiagnosticItem(
                         severity="WARNING",
                         category="COMPATIBILITY",
-                        message=f"GEMINI.md size ({size} bytes) exceeds AGY 24 KB limit and will be truncated by CLI.",
+                        message=f"Aggregate workspace rule size ({total_rule_bytes} bytes) likely exceeds AGY 20,000 token budget.",
                         provider="agy",
-                        action="Reduce GEMINI.md content below 24,000 bytes.",
+                        action="Demote secondary rules to on-demand skills.",
                     )
                 )
 

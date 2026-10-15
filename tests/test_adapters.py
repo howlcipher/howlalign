@@ -3,11 +3,14 @@
 import json
 from pathlib import Path
 
+import pytest
 import toml
 
 from howlalign.adapters.agy import AgyAdapter
 from howlalign.adapters.claude import ClaudeAdapter
 from howlalign.adapters.codex import CodexAdapter
+from howlalign.core.exceptions import ConfigurationParseError
+from howlalign.core.models import ProviderInfo, ProviderType
 from howlalign.core.policy import get_default_policy
 
 
@@ -142,3 +145,141 @@ def test_agy_adapter_generation(tmp_path: Path):
     parsed_global = json.loads(global_settings_change.proposed_content)
     assert parsed_global["model"] == "gemini-3.8-flash-high"
     assert parsed_global["toolPermission"] == "proceed-in-sandbox"
+
+
+def test_claude_malformed_config_fails_closed(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    claude_dir = workspace / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text("{malformed json", encoding="utf-8")
+
+    adapter = ClaudeAdapter(workspace_dir=workspace, home_dir=home)
+    policy = get_default_policy()
+
+    with pytest.raises(ConfigurationParseError, match="Failed to parse existing JSON"):
+        adapter.generate_changes(policy, is_global=False)
+
+
+def test_claude_user_agent_conflict_preservation(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    agents_dir = workspace / ".claude" / "agents"
+    agents_dir.mkdir(parents=True)
+    user_agent_file = agents_dir / "search.md"
+    user_agent_file.write_text("# My Custom User Agent\nDo not overwrite me!\n", encoding="utf-8")
+
+    adapter = ClaudeAdapter(workspace_dir=workspace, home_dir=home)
+    policy = get_default_policy()
+
+    changes = adapter.generate_changes(policy, is_global=False)
+    search_change = next(c for c in changes if c.file_path == user_agent_file)
+    assert search_change.is_user_owned_conflict is True
+    assert search_change.proposed_content == "# My Custom User Agent\nDo not overwrite me!\n"
+    assert "User-authored custom agent" in search_change.description
+
+
+def test_codex_malformed_config_fails_closed(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    codex_dir = workspace / ".codex"
+    codex_dir.mkdir()
+    (codex_dir / "config.toml").write_text("malformed toml [ = invalid", encoding="utf-8")
+
+    adapter = CodexAdapter(workspace_dir=workspace, home_dir=home)
+    policy = get_default_policy()
+
+    with pytest.raises(ConfigurationParseError, match="Failed to parse existing TOML"):
+        adapter.generate_changes(policy, is_global=False)
+
+
+def test_codex_user_agent_preservation_and_read_only(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    agents_dir = workspace / ".codex" / "agents"
+    agents_dir.mkdir(parents=True)
+    user_role = agents_dir / "search.toml"
+    user_role.write_text('name = "my-custom-search"\n', encoding="utf-8")
+
+    adapter = CodexAdapter(workspace_dir=workspace, home_dir=home)
+    policy = get_default_policy()
+
+    changes = adapter.generate_changes(policy, is_global=False)
+    search_change = next(c for c in changes if c.file_path == user_role)
+    assert search_change.is_user_owned_conflict is True
+    assert search_change.proposed_content == 'name = "my-custom-search"\n'
+
+    # Check generated read-only agent when none exists (e.g. docs)
+    docs_change = next(c for c in changes if c.file_path.name == "docs.toml")
+    parsed_docs = toml.loads(docs_change.proposed_content)
+    assert parsed_docs.get("sandbox_mode") == "read-only"
+
+
+def test_agy_malformed_settings_fails_closed(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    agy_dir = home / ".gemini" / "antigravity-cli"
+    agy_dir.mkdir(parents=True)
+    (agy_dir / "settings.json").write_text("{bad json:", encoding="utf-8")
+
+    adapter = AgyAdapter(workspace_dir=workspace, home_dir=home)
+    policy = get_default_policy()
+
+    with pytest.raises(ConfigurationParseError, match="Failed to parse existing JSON"):
+        adapter.generate_changes(policy, is_global=True)
+
+
+def test_agy_user_skill_preservation(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    skill_file = workspace / ".agents" / "skills" / "search" / "SKILL.md"
+    skill_file.parent.mkdir(parents=True)
+    skill_file.write_text("# Custom Skill by User\nNo howlalign marker\n", encoding="utf-8")
+
+    adapter = AgyAdapter(workspace_dir=workspace, home_dir=home)
+    policy = get_default_policy()
+
+    changes = adapter.generate_changes(policy, is_global=False)
+    search_skill_change = next(c for c in changes if c.file_path == skill_file)
+    assert search_skill_change.is_user_owned_conflict is True
+    assert search_skill_change.proposed_content == "# Custom Skill by User\nNo howlalign marker\n"
+
+
+def test_agy_rule_budget_diagnostics(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+
+    # Create a GEMINI.md that exceeds 24 KB (24,576 bytes)
+    gemini_file = workspace / "GEMINI.md"
+    gemini_file.write_text("A" * 25000, encoding="utf-8")
+
+    adapter = AgyAdapter(workspace_dir=workspace, home_dir=home)
+    policy = get_default_policy()
+    info = ProviderInfo(
+        provider=ProviderType.AGY, installed=True, executable_path="/bin/agy", version="1.3.0"
+    )
+
+    diagnostics = adapter.check_health(policy, info, is_global=False)
+    budget_error = next((d for d in diagnostics if "exceeds AGY 24 KB limit" in d.message), None)
+    assert budget_error is not None
+    assert budget_error.severity == "ERROR"

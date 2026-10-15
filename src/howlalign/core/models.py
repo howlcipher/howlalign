@@ -14,6 +14,12 @@ class ProviderType(str, Enum):
     AGY = "agy"
 
 
+class Scope(str, Enum):
+    PROJECT = "project"
+    GLOBAL = "global"
+    ALL = "all"
+
+
 class RoleClass(str, Enum):
     PLANNING = "planning"
     IMPLEMENTATION = "implementation"
@@ -47,6 +53,16 @@ class RoleConfig:
     agy_model: str
     effort: EffortLevel = EffortLevel.MEDIUM
     description: str = ""
+
+    def get_model_for_provider(self, provider: ProviderType) -> str:
+        """Retrieve model identifier for a given provider."""
+        if provider == ProviderType.CLAUDE:
+            return self.claude_model
+        elif provider == ProviderType.CODEX:
+            return self.codex_model
+        elif provider == ProviderType.AGY:
+            return self.agy_model
+        raise ValueError(f"Unknown provider: {provider}")
 
 
 @dataclass
@@ -99,6 +115,9 @@ class ConfigChange:
     provider: ProviderType
     is_creation: bool = False
     is_deletion: bool = False
+    is_user_owned_conflict: bool = (
+        False  # True if existing file was authored by user without managed_by marker
+    )
 
 
 @dataclass
@@ -106,6 +125,8 @@ class DiffResult:
     changes: list[ConfigChange] = field(default_factory=list)
     unified_diff: str = ""
     summary: str = ""
+    has_conflicts: bool = False
+    has_redactions: bool = False
 
 
 @dataclass
@@ -114,6 +135,7 @@ class ApplyResult:
     applied_files: list[str] = field(default_factory=list)
     backup_dir: str | None = None
     errors: list[str] = field(default_factory=list)
+    rolled_back: bool = False
 
 
 @dataclass

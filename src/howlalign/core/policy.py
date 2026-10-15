@@ -6,6 +6,17 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from howlalign.core.constants import (
+    DEFAULT_POLICY_VERSION,
+    HIDDEN_POLICY_FILENAME,
+    POLICY_FILENAME,
+    SUPPORTED_POLICY_VERSIONS,
+)
+from howlalign.core.exceptions import (
+    PolicyNotFoundError,
+    PolicySyntaxError,
+    PolicyValidationError,
+)
 from howlalign.core.models import (
     AgentConfig,
     ApprovalPolicy,
@@ -17,9 +28,6 @@ from howlalign.core.models import (
     RoleConfig,
     SandboxMode,
 )
-
-DEFAULT_POLICY_VERSION = "0.1.0"
-SUPPORTED_POLICY_VERSIONS = {"0.1.0"}
 
 DEFAULT_SEARCH_PROMPT = """You are a specialized Search and Exploration subagent.
 Responsibilities:
@@ -143,7 +151,7 @@ def serialize_policy_toml(policy: Policy) -> str:
         f'schema_version = "{policy.schema_version}"',
         "",
         "[providers]",
-        f"enabled = {list(p.value for p in policy.enabled_providers)!r}",
+        f"enabled = {[p.value for p in policy.enabled_providers]!r}",
         "",
         "# Model Role Configurations",
     ]
@@ -166,6 +174,10 @@ def serialize_policy_toml(policy: Policy) -> str:
         lines.append(f'description = "{ac.description}"')
         lines.append(f'model_role = "{ac.model_role.value}"')
         lines.append(f"read_only = {'true' if ac.read_only else 'false'}")
+        if ac.system_prompt:
+            # Escape triple single quotes if present
+            clean_prompt = ac.system_prompt.strip()
+            lines.append(f"system_prompt = '''\n{clean_prompt}\n'''")
         lines.append("")
 
     lines.append("# Security & Permission Boundaries")
@@ -196,9 +208,9 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
     """Validate and convert dictionary data into a Policy object."""
     schema_version = str(data.get("schema_version", ""))
     if not schema_version:
-        raise ValueError("Policy missing required field 'schema_version'")
+        raise PolicyValidationError("Policy missing required field 'schema_version'")
     if schema_version not in SUPPORTED_POLICY_VERSIONS:
-        raise ValueError(
+        raise PolicyValidationError(
             f"Unsupported policy schema_version '{schema_version}'. Supported: {sorted(SUPPORTED_POLICY_VERSIONS)}"
         )
 
@@ -245,7 +257,8 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
             m_role = RoleClass.SUPPORT
 
         default_agent = default_policy.agents.get(agent_key)
-        sys_prompt = default_agent.system_prompt if default_agent else ""
+        fallback_prompt = default_agent.system_prompt if default_agent else ""
+        sys_prompt = a_data.get("system_prompt", fallback_prompt)
 
         agents[agent_key] = AgentConfig(
             name=agent_key,
@@ -287,13 +300,16 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
 
 
 def load_policy_file(path: Path | str) -> Policy:
-    """Load and parse policy from a TOML file path."""
+    """Load and parse policy from a TOML file path with domain error handling."""
     target = Path(path).resolve()
     if not target.is_file():
-        raise FileNotFoundError(f"Policy file not found: {target}")
+        raise PolicyNotFoundError(f"Policy file not found: {target}")
 
-    with open(target, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        with open(target, "rb") as f:
+            data = tomllib.load(f)
+    except Exception as err:
+        raise PolicySyntaxError(f"Failed to parse policy TOML file at '{target}': {err}") from err
 
     return load_policy_from_dict(data)
 
@@ -306,8 +322,8 @@ def discover_policy_file(custom_path: str | Path | None = None) -> Path | None:
 
     # Check project-level
     candidates = [
-        Path.cwd() / "howlalign.toml",
-        Path.cwd() / ".howlalign.toml",
+        Path.cwd() / POLICY_FILENAME,
+        Path.cwd() / HIDDEN_POLICY_FILENAME,
     ]
     for c in candidates:
         if c.is_file():
@@ -317,7 +333,7 @@ def discover_policy_file(custom_path: str | Path | None = None) -> Path | None:
     cur = Path.cwd()
     while cur != cur.parent:
         if (cur / ".git").is_dir():
-            for c in (cur / "howlalign.toml", cur / ".howlalign.toml"):
+            for c in (cur / POLICY_FILENAME, cur / HIDDEN_POLICY_FILENAME):
                 if c.is_file():
                     return c
             break
@@ -326,8 +342,8 @@ def discover_policy_file(custom_path: str | Path | None = None) -> Path | None:
     # Global level
     home = Path.home()
     global_candidates = [
-        home / ".config" / "howlalign" / "howlalign.toml",
-        home / ".howlalign.toml",
+        home / ".config" / "howlalign" / POLICY_FILENAME,
+        home / HIDDEN_POLICY_FILENAME,
     ]
     for g in global_candidates:
         if g.is_file():
@@ -345,13 +361,13 @@ def init_policy_file(
     if path:
         target = Path(path).resolve()
         if target.is_dir():
-            target = target / "howlalign.toml"
+            target = target / POLICY_FILENAME
     elif is_global:
         config_dir = Path.home() / ".config" / "howlalign"
         config_dir.mkdir(parents=True, exist_ok=True)
-        target = config_dir / "howlalign.toml"
+        target = config_dir / POLICY_FILENAME
     else:
-        target = Path.cwd() / "howlalign.toml"
+        target = Path.cwd() / POLICY_FILENAME
 
     if target.is_file() and not force:
         raise FileExistsError(f"Policy file already exists at: {target}")

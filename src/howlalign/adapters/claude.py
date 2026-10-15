@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from howlalign.adapters.base import BaseAdapter
+from howlalign.adapters.base import BaseAdapter, is_file_managed_by_howlalign, safe_read_text
+from howlalign.core.constants import MANAGED_BY_MARKER_MD
+from howlalign.core.exceptions import ConfigurationParseError
 from howlalign.core.models import (
     ApprovalPolicy,
     ConfigChange,
@@ -39,14 +41,14 @@ class ClaudeAdapter(BaseAdapter):
         self,
         policy: Policy,
         existing_content: str | None,
-        is_global: bool,
+        settings_path: Path,
     ) -> str:
         data: dict[str, Any] = {}
-        if existing_content:
+        if existing_content and existing_content.strip():
             try:
                 data = json.loads(existing_content)
-            except Exception:
-                data = {}
+            except Exception as err:
+                raise ConfigurationParseError(settings_path, "JSON", err) from err
 
         # 1. Model resolution
         claude_overrides = policy.overrides.get("claude", {})
@@ -60,35 +62,21 @@ class ClaudeAdapter(BaseAdapter):
 
         # 2. Effort settings
         model_settings = data.setdefault("modelSettings", {})
-        plan_role = policy.roles.get(RoleClass.PLANNING)
-        if plan_role:
-            plan_entry = model_settings.setdefault(plan_role.claude_model, {})
-            plan_entry["effortLevel"] = plan_role.effort.value
+        for role_class in (RoleClass.PLANNING, RoleClass.IMPLEMENTATION, RoleClass.SUPPORT):
+            r_cfg = policy.roles.get(role_class)
+            if r_cfg:
+                m_entry = model_settings.setdefault(r_cfg.claude_model, {})
+                m_entry["effortLevel"] = r_cfg.effort.value
 
-        impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
-        if impl_role:
-            impl_entry = model_settings.setdefault(impl_role.claude_model, {})
-            impl_entry["effortLevel"] = impl_role.effort.value
-
-        # 3. Permissions
+        # 3. Permissions - conservative mapping
         permissions = data.setdefault("permissions", {})
         if policy.permissions.ask_approval == ApprovalPolicy.NEVER:
             permissions["defaultMode"] = "acceptEdits"
         elif policy.permissions.ask_approval == ApprovalPolicy.ALWAYS:
             permissions["defaultMode"] = "default"
         else:
-            permissions["defaultMode"] = "acceptEdits"
-
-        # Safe defaults for tools
-        allow_list = permissions.setdefault("allow", [])
-        safe_defaults = [
-            "Bash(git status)",
-            "Bash(git diff)",
-            "Bash(git log *)",
-        ]
-        for item in safe_defaults:
-            if item not in allow_list:
-                allow_list.append(item)
+            # Default ON_REQUEST maps conservatively to standard "default" (prompts before mutations)
+            permissions["defaultMode"] = "default"
 
         return json.dumps(data, indent=2) + "\n"
 
@@ -100,11 +88,12 @@ class ClaudeAdapter(BaseAdapter):
         tools: list[str],
         disallowed_tools: list[str],
         permission_mode: str,
-        model: str = "inherit",
+        model: str,
     ) -> str:
         tools_formatted = "\n".join(f"  - {t}" for t in tools)
         disallowed_formatted = "\n".join(f"  - {t}" for t in disallowed_tools)
         return f"""---
+managed_by: howlalign
 name: {name}
 description: {description}
 tools:
@@ -115,6 +104,7 @@ model: {model}
 permissionMode: {permission_mode}
 ---
 
+<!-- {MANAGED_BY_MARKER_MD} -->
 {prompt.strip()}
 """
 
@@ -127,10 +117,10 @@ permissionMode: {permission_mode}
 
         # 1. Settings JSON
         settings_path = self._get_target_settings_path(is_global)
-        existing_settings = (
-            settings_path.read_text(encoding="utf-8") if settings_path.is_file() else None
+        existing_settings = safe_read_text(settings_path)
+        proposed_settings = self._generate_settings_content(
+            policy, existing_settings, settings_path
         )
-        proposed_settings = self._generate_settings_content(policy, existing_settings, is_global)
 
         changes.append(
             ConfigChange(
@@ -167,18 +157,41 @@ permissionMode: {permission_mode}
             if not agent_cfg.enabled:
                 continue
 
+            agent_file = agents_dir / f"{agent_name}.md"
+            existing_agent = safe_read_text(agent_file)
+
+            # Conflict Detection: Avoid silently overwriting user-authored agent files
+            if existing_agent is not None and not is_file_managed_by_howlalign(
+                existing_agent, "md"
+            ):
+                changes.append(
+                    ConfigChange(
+                        file_path=agent_file,
+                        original_content=existing_agent,
+                        proposed_content=existing_agent,
+                        description=f"User-authored custom agent '{agent_name}' detected. Preserved without modification.",
+                        provider=ProviderType.CLAUDE,
+                        is_user_owned_conflict=True,
+                    )
+                )
+                continue
+
+            # Determine tools based on configuration or default map
             tool_spec = agent_tool_map.get(
                 agent_name,
                 {
-                    "tools": ["Read", "Glob", "Grep"],
-                    "disallowed": ["Edit", "Write"],
-                    "mode": "plan",
+                    "tools": ["Read", "Glob", "Grep"]
+                    if agent_cfg.read_only
+                    else ["Read", "Glob", "Grep", "Edit", "Write"],
+                    "disallowed": ["Edit", "Write"] if agent_cfg.read_only else [],
+                    "mode": "plan" if agent_cfg.read_only else "default",
                 },
             )
-            agent_file = agents_dir / f"{agent_name}.md"
-            existing_agent = (
-                agent_file.read_text(encoding="utf-8") if agent_file.is_file() else None
-            )
+
+            # Dynamic Model Resolution: Support role uses Haiku, Implementation uses Sonnet
+            role_cfg = policy.roles.get(agent_cfg.model_role)
+            model_target = role_cfg.claude_model if role_cfg else "inherit"
+
             proposed_agent = self._generate_agent_markdown(
                 name=agent_name,
                 description=agent_cfg.description,
@@ -186,7 +199,7 @@ permissionMode: {permission_mode}
                 tools=tool_spec["tools"],
                 disallowed_tools=tool_spec["disallowed"],
                 permission_mode=tool_spec["mode"],
-                model="inherit",
+                model=model_target,
             )
 
             changes.append(
@@ -203,13 +216,11 @@ permissionMode: {permission_mode}
         # 3. Project-level CLAUDE.md
         if not is_global:
             claude_md_path = self.workspace / "CLAUDE.md"
-            existing_claude_md = (
-                claude_md_path.read_text(encoding="utf-8") if claude_md_path.is_file() else None
-            )
+            existing_claude_md = safe_read_text(claude_md_path)
 
-            # If CLAUDE.md already exists, preserve it and only ensure alignment header if empty
             if existing_claude_md is None:
                 proposed_claude_md = f"""# Project Engineering Guidelines (Aligned via HowlAlign)
+<!-- {MANAGED_BY_MARKER_MD} -->
 
 This repository is aligned with HowlAlign policy schema v{policy.schema_version}.
 
@@ -273,9 +284,24 @@ This repository is aligned with HowlAlign policy schema v{policy.schema_version}
                 )
             )
 
-        # Check settings path
+        # Check existing settings syntax validity
         settings_path = self._get_target_settings_path(is_global)
-        if not settings_path.is_file():
+        if settings_path.is_file():
+            content = safe_read_text(settings_path)
+            if content and content.strip():
+                try:
+                    json.loads(content)
+                except Exception as err:
+                    items.append(
+                        DiagnosticItem(
+                            severity="ERROR",
+                            category="CONFIGURATION",
+                            message=f"Existing Claude Code settings file at '{settings_path}' is malformed JSON: {err}",
+                            provider="claude",
+                            action="Repair syntax in settings.json to enable alignment.",
+                        )
+                    )
+        else:
             items.append(
                 DiagnosticItem(
                     severity="INFO",
