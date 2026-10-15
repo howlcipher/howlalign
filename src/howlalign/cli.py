@@ -236,12 +236,21 @@ def apply_cmd(
     default=False,
     help="Force restore even if target files have drifted since apply.",
 )
-def restore_cmd(backup_dir: str, force: bool) -> None:
+@click.option(
+    "--workspace",
+    "-w",
+    "workspace_path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default=None,
+    help="Explicit trusted workspace directory for cross-mount restoration.",
+)
+def restore_cmd(backup_dir: str, force: bool, workspace_path: str | None) -> None:
     """Restore configuration files from a backup directory."""
     from howlalign.core.writer import ConfigWriter
 
+    trusted_ws = Path(workspace_path) if workspace_path else None
     writer = ConfigWriter()
-    res = writer.restore_backup(Path(backup_dir), force=force)
+    res = writer.restore_backup(Path(backup_dir), force=force, trusted_workspace=trusted_ws)
     if res.success:
         click.secho(f"✓ Successfully restored configuration from {backup_dir}!", fg="green")
         for f in res.applied_files:

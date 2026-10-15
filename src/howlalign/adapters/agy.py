@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from howlalign.adapters.base import BaseAdapter, is_file_managed_by_howlalign, safe_read_text
+from howlalign.adapters.base import (
+    BaseAdapter,
+    compute_managed_fingerprint,
+    has_user_modifications,
+    is_file_managed_by_howlalign,
+    safe_read_text,
+)
 from howlalign.core.constants import (
     AGY_MAX_AGGREGATE_RULE_BYTES,
     AGY_MAX_RULE_BYTES,
@@ -55,11 +61,6 @@ class AgyAdapter(BaseAdapter):
         if impl_role:
             data["model"] = impl_role.agy_model
 
-        # Planning role mapping
-        plan_role = policy.roles.get(RoleClass.PLANNING)
-        if plan_role:
-            data["planningModel"] = plan_role.agy_model
-
         # Permissions mode
         if policy.permissions.ask_approval == ApprovalPolicy.NEVER:
             data["toolPermission"] = "always-proceed"
@@ -83,8 +84,11 @@ class AgyAdapter(BaseAdapter):
         description: str,
         prompt: str,
     ) -> str:
+        body = f"# {name.capitalize()} Skill\n\n{prompt.strip()}"
+        fp = compute_managed_fingerprint(body)
         return f"""---
 managed_by: howlalign
+managed_fingerprint: {fp}
 name: {name}
 description: >-
   {description}
@@ -105,8 +109,20 @@ description: >-
         read_only: bool = False,
     ) -> str:
         disallowed_block = 'disallowedTools: ["Edit", "Write"]\n' if read_only else ""
+        body = f"""name: {name}
+description: >-
+  {description}
+mainAgent: false
+subagent: true
+model: {model}
+{disallowed_block}
+# {name.capitalize()} Agent
+
+{prompt.strip()}"""
+        fp = compute_managed_fingerprint(body)
         return f"""---
 managed_by: howlalign
+managed_fingerprint: {fp}
 name: {name}
 description: >-
   {description}
@@ -156,21 +172,32 @@ model: {model}
             skill_file = agents_root / "skills" / agent_name / "SKILL.md"
             existing_skill = safe_read_text(skill_file)
 
-            # Conflict Detection: Avoid overwriting user-authored skills
-            if existing_skill is not None and not is_file_managed_by_howlalign(
-                existing_skill, "md"
-            ):
-                changes.append(
-                    ConfigChange(
-                        file_path=skill_file,
-                        original_content=existing_skill,
-                        proposed_content=existing_skill,
-                        description=f"User-authored AGY skill '{agent_name}' detected. Preserved without modification.",
-                        provider=ProviderType.AGY,
-                        is_user_owned_conflict=True,
+            # Conflict Detection: Avoid overwriting user-authored or user-modified skills
+            if existing_skill is not None:
+                if not is_file_managed_by_howlalign(existing_skill, "md"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=skill_file,
+                            original_content=existing_skill,
+                            proposed_content=existing_skill,
+                            description=f"User-authored AGY skill '{agent_name}' detected. Preserved without modification.",
+                            provider=ProviderType.AGY,
+                            is_user_owned_conflict=True,
+                        )
                     )
-                )
-                continue
+                    continue
+                elif has_user_modifications(existing_skill, "md"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=skill_file,
+                            original_content=existing_skill,
+                            proposed_content=existing_skill,
+                            description=f"User modifications detected in managed AGY skill '{agent_name}'. Preserved without modification.",
+                            provider=ProviderType.AGY,
+                            is_user_owned_conflict=True,
+                        )
+                    )
+                    continue
 
             proposed_skill = self._generate_skill_markdown(
                 name=agent_name,
@@ -197,21 +224,32 @@ model: {model}
             agent_file = agents_root / "agents" / agent_name / "agent.md"
             existing_agent = safe_read_text(agent_file)
 
-            # Conflict Detection: Avoid overwriting user-authored subagents
-            if existing_agent is not None and not is_file_managed_by_howlalign(
-                existing_agent, "md"
-            ):
-                changes.append(
-                    ConfigChange(
-                        file_path=agent_file,
-                        original_content=existing_agent,
-                        proposed_content=existing_agent,
-                        description=f"User-authored AGY agent '{agent_name}' detected. Preserved without modification.",
-                        provider=ProviderType.AGY,
-                        is_user_owned_conflict=True,
+            # Conflict Detection: Avoid overwriting user-authored or user-modified subagents
+            if existing_agent is not None:
+                if not is_file_managed_by_howlalign(existing_agent, "md"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=agent_file,
+                            original_content=existing_agent,
+                            proposed_content=existing_agent,
+                            description=f"User-authored AGY agent '{agent_name}' detected. Preserved without modification.",
+                            provider=ProviderType.AGY,
+                            is_user_owned_conflict=True,
+                        )
                     )
-                )
-                continue
+                    continue
+                elif has_user_modifications(existing_agent, "md"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=agent_file,
+                            original_content=existing_agent,
+                            proposed_content=existing_agent,
+                            description=f"User modifications detected in managed AGY agent '{agent_name}'. Preserved without modification.",
+                            provider=ProviderType.AGY,
+                            is_user_owned_conflict=True,
+                        )
+                    )
+                    continue
 
             role_cfg = policy.roles.get(agent_cfg.model_role)
             model_slug = role_cfg.agy_model if role_cfg else "gemini-3.8-flash-high"
@@ -267,12 +305,12 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
     def check_health(
         self,
         policy: Policy,
-        info: ProviderInfo,
+        info: ProviderInfo | None = None,
         is_global: bool = False,
     ) -> list[DiagnosticItem]:
         items: list[DiagnosticItem] = []
 
-        if not info.installed:
+        if info is not None and not info.installed:
             items.append(
                 DiagnosticItem(
                     severity="WARNING",
@@ -284,14 +322,15 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
             )
             return items
 
-        items.append(
-            DiagnosticItem(
-                severity="INFO",
-                category="VERSION",
-                message=f"AGY CLI detected at {info.executable_path} (version: {info.version or 'unknown'}).",
-                provider="agy",
+        if info is not None:
+            items.append(
+                DiagnosticItem(
+                    severity="INFO",
+                    category="VERSION",
+                    message=f"AGY CLI detected at {info.executable_path} (version: {info.version or 'unknown'}).",
+                    provider="agy",
+                )
             )
-        )
 
         # Validate syntax of existing settings.json
         settings_path = self._get_global_settings_path()
@@ -310,6 +349,23 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
                             action="Repair syntax in settings.json to enable alignment.",
                         )
                     )
+
+        # Check planning model capability in AGY
+        plan_role = policy.roles.get(RoleClass.PLANNING)
+        impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
+        if plan_role and impl_role and plan_role.agy_model != impl_role.agy_model:
+            items.append(
+                DiagnosticItem(
+                    severity="INFO",
+                    category="COMPATIBILITY",
+                    message=(
+                        f"Policy specifies planning model '{plan_role.agy_model}' differing from implementation model '{impl_role.agy_model}'. "
+                        "AGY CLI settings.json supports global 'model' configuration; use progressive skills or runtime launcher flags for specialized planning delegation."
+                    ),
+                    provider="agy",
+                    action="Configure specialized planning skills in .agents/skills/ for automated model routing.",
+                )
+            )
 
         # Comprehensive rule file budget check across all candidate rule files
         if not is_global:

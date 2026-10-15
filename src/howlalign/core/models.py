@@ -129,6 +129,13 @@ class DiffResult:
     has_redactions: bool = False
 
 
+class RecoveryState(str, Enum):
+    NONE = "none"
+    SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
+    FAILED = "failed"
+
+
 @dataclass
 class ApplyResult:
     success: bool
@@ -136,6 +143,8 @@ class ApplyResult:
     backup_dir: str | None = None
     errors: list[str] = field(default_factory=list)
     rolled_back: bool = False
+    recovery_state: RecoveryState = RecoveryState.NONE
+    remaining_modified_files: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -8,36 +8,74 @@ from pathlib import Path
 
 from howlalign.core.models import ConfigChange, DiffResult
 
-# Patterns to match sensitive key-value pairs for display masking
-SECRET_VALUE_PATTERNS = [
-    re.compile(
-        r'((?:api[_-]?key|access[_-]?token|secret[_-]?key|auth[_-]?token|password)\s*[:=]\s*["\'])([^"\']{4,})(["\'])',
-        re.IGNORECASE,
-    ),
-    re.compile(r"(bearer\s+)([a-zA-Z0-9_\-\.]{8,})", re.IGNORECASE),
-]
+# Comprehensive patterns to match sensitive values across JSON, TOML, YAML, env, and headers
+SECRET_MULTILINE_PATTERN = re.compile(
+    r"-----BEGIN (?:[A-Z0-9_-]+ )?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9_-]+ )?PRIVATE KEY-----",
+    re.MULTILINE,
+)
+
+SECRET_QUOTED_PATTERN = re.compile(
+    r'((?:api[_-]?key|access[_-]?token|secret[_-]?key|auth[_-]?token|password|client[_-]?secret|private[_-]?key|token|credential|anthropic[_-]?api[_-]?key|openai[_-]?api[_-]?key|gemini[_-]?api[_-]?key)\s*[:=]\s*["\'])(?!\*{4}\[REDACTED)([^"\']+)(["\'])',
+    re.IGNORECASE,
+)
+
+SECRET_UNQUOTED_PATTERN = re.compile(
+    r'((?:api[_-]?key|access[_-]?token|secret[_-]?key|auth[_-]?token|password|client[_-]?secret|private[_-]?key|token|credential|anthropic[_-]?api[_-]?key|openai[_-]?api[_-]?key|gemini[_-]?api[_-]?key)\s*[:=]\s*)(?!\*{4}\[REDACTED)([^\s#",;\'`]+)',
+    re.IGNORECASE,
+)
+
+SECRET_BEARER_PATTERN = re.compile(
+    r"((?:bearer|authorization\s*:\s*(?:bearer|basic)?)\s+)([a-zA-Z0-9_\-\.\+\/=]{8,})",
+    re.IGNORECASE,
+)
+
+SECRET_STANDALONE_TOKEN_PATTERN = re.compile(
+    r"\b(sk-[a-zA-Z0-9_\-]{15,}|gh[pousr]_[A-Za-z0-9_]{15,}|xox[baprs]-[A-Za-z0-9\-]{10,})\b"
+)
 
 
 def redact_secrets_for_display(text: str) -> tuple[str, bool]:
-    """Mask credentials and tokens in text for safe terminal/log display."""
+    """Mask credentials and tokens in text for safe terminal/log display without revealing prefixes or suffixes."""
     redacted = False
+    result = text
 
-    def _replace_kv(m: re.Match) -> str:
+    # 1. Multi-line private keys
+    if SECRET_MULTILINE_PATTERN.search(result):
+        redacted = True
+        result = SECRET_MULTILINE_PATTERN.sub("****[REDACTED PRIVATE KEY]****", result)
+
+    # 2. Quoted assignments
+    def _replace_quoted(m: re.Match) -> str:
         nonlocal redacted
         redacted = True
-        prefix, val, suffix = m.group(1), m.group(2), m.group(3)
-        masked_val = val[:2] + "*" * (len(val) - 4) + val[-2:] if len(val) > 6 else "****"
-        return f"{prefix}{masked_val}{suffix}"
+        prefix, _, suffix = m.group(1), m.group(2), m.group(3)
+        return f"{prefix}****[REDACTED]****{suffix}"
 
+    # 3. Unquoted assignments
+    def _replace_unquoted(m: re.Match) -> str:
+        nonlocal redacted
+        redacted = True
+        prefix = m.group(1)
+        return f"{prefix}****[REDACTED]****"
+
+    # 4. Bearer / Authorization headers
     def _replace_bearer(m: re.Match) -> str:
         nonlocal redacted
         redacted = True
-        prefix, token = m.group(1), m.group(2)
-        masked_token = token[:3] + "*" * 8 + "[REDACTED]"
-        return f"{prefix}{masked_token}"
+        prefix = m.group(1)
+        return f"{prefix}****[REDACTED]****"
 
-    result = SECRET_VALUE_PATTERNS[0].sub(_replace_kv, text)
-    result = SECRET_VALUE_PATTERNS[1].sub(_replace_bearer, result)
+    # 5. Standalone tokens
+    def _replace_standalone(m: re.Match) -> str:
+        nonlocal redacted
+        redacted = True
+        return "****[REDACTED TOKEN]****"
+
+    result = SECRET_QUOTED_PATTERN.sub(_replace_quoted, result)
+    result = SECRET_UNQUOTED_PATTERN.sub(_replace_unquoted, result)
+    result = SECRET_BEARER_PATTERN.sub(_replace_bearer, result)
+    result = SECRET_STANDALONE_TOKEN_PATTERN.sub(_replace_standalone, result)
+
     return result, redacted
 
 
@@ -75,7 +113,16 @@ def generate_unified_diff(
         fromfile=fromfile,
         tofile=tofile,
     )
-    return "".join(diff)
+    diff_lines = list(diff)
+    if not diff_lines and original_text != proposed_text:
+        diff_lines = [
+            f"--- {fromfile}\n",
+            f"+++ {tofile}\n",
+            "@@ -1 +1 @@\n",
+            "- ****[REDACTED SENSITIVE CONTENT]****\n",
+            "+ ****[REDACTED SENSITIVE CONTENT (UPDATED)]****\n",
+        ]
+    return "".join(diff_lines)
 
 
 class Differ:
@@ -148,7 +195,7 @@ class Differ:
 
         return DiffResult(
             changes=changes,
-            unified_diff=header_notes + "\n\n".join(diff_chunks) if diff_chunks else "",
+            unified_diff=(header_notes + "\n\n".join(diff_chunks)) if diff_chunks else "",
             summary=summary,
             has_conflicts=has_conflicts,
             has_redactions=any_redactions,

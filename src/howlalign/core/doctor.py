@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import click
@@ -12,6 +11,13 @@ from howlalign.adapters.agy import AgyAdapter
 from howlalign.adapters.base import BaseAdapter
 from howlalign.adapters.claude import ClaudeAdapter
 from howlalign.adapters.codex import CodexAdapter
+from howlalign.core.differ import (
+    SECRET_BEARER_PATTERN,
+    SECRET_MULTILINE_PATTERN,
+    SECRET_QUOTED_PATTERN,
+    SECRET_STANDALONE_TOKEN_PATTERN,
+    SECRET_UNQUOTED_PATTERN,
+)
 from howlalign.core.discovery import ProviderDiscovery
 from howlalign.core.models import (
     DiagnosticItem,
@@ -21,25 +27,22 @@ from howlalign.core.models import (
 )
 from howlalign.core.policy import discover_policy_file, get_default_policy, load_policy_file
 
-# Matches assignment of credentials, e.g. api_key = "sk-..." or Bearer tokens
-SECRET_ASSIGNMENT_PATTERNS = [
-    re.compile(
-        r'(?:api[_-]?key|access[_-]?token|secret[_-]?key|password)\s*[:=]\s*["\']([^"\']{6,})["\']',
-        re.IGNORECASE,
-    ),
-    re.compile(r"bearer\s+([a-zA-Z0-9_\-\.]{12,})", re.IGNORECASE),
-]
-
 
 def check_for_leaked_secrets(content: str) -> list[str]:
-    """Scan text for suspected credential assignments, returning masked descriptions."""
+    """Scan text for suspected credential assignments, returning safe masked descriptions."""
     findings: list[str] = []
-    for pattern in SECRET_ASSIGNMENT_PATTERNS:
-        for match in pattern.finditer(content):
-            val = match.group(1)
-            # Mask the secret value
-            masked = val[:2] + "*" * 6 + "[REDACTED]"
-            findings.append(f"Secret pattern matched with value '{masked}'")
+    if SECRET_MULTILINE_PATTERN.search(content):
+        findings.append("Secret pattern matched: Private Key block [REDACTED]")
+    for match in SECRET_QUOTED_PATTERN.finditer(content):
+        key_name = match.group(1).split("=")[0].split(":")[0].strip().strip('"').strip("'")
+        findings.append(f"Secret pattern matched with value for '{key_name}': ****[REDACTED]****")
+    for match in SECRET_UNQUOTED_PATTERN.finditer(content):
+        key_name = match.group(1).split("=")[0].split(":")[0].strip()
+        findings.append(f"Secret pattern matched with value for '{key_name}': ****[REDACTED]****")
+    for _ in SECRET_BEARER_PATTERN.finditer(content):
+        findings.append("Secret pattern matched with value for Bearer token: ****[REDACTED]****")
+    for _ in SECRET_STANDALONE_TOKEN_PATTERN.finditer(content):
+        findings.append("Secret pattern matched: Standalone API token [REDACTED]")
     return findings
 
 

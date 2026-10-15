@@ -216,24 +216,53 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
 
     # Providers
     providers_sec = data.get("providers", {})
+    if not isinstance(providers_sec, dict):
+        raise PolicyValidationError("Invalid [providers] section: expected table")
     raw_enabled = providers_sec.get("enabled", ["claude", "codex", "agy"])
+    if not isinstance(raw_enabled, list):
+        raise PolicyValidationError(
+            f"Invalid providers.enabled: expected list of strings, got {type(raw_enabled).__name__}"
+        )
     enabled_providers: list[ProviderType] = []
     for p in raw_enabled:
+        if not isinstance(p, str):
+            raise PolicyValidationError(
+                f"Invalid provider entry in providers.enabled: expected string, got {type(p).__name__}"
+            )
         try:
             enabled_providers.append(ProviderType(p.lower()))
         except ValueError:
-            pass
+            valid_providers = [x.value for x in ProviderType]
+            raise PolicyValidationError(
+                f"Unknown provider '{p}' in providers.enabled. Valid options: {valid_providers}"
+            )
 
     # Roles
     roles: dict[RoleClass, RoleConfig] = {}
     roles_sec = data.get("roles", {})
+    if not isinstance(roles_sec, dict):
+        raise PolicyValidationError("Invalid [roles] section: expected table")
+
     for role_key in ("planning", "implementation", "support"):
         r_data = roles_sec.get(role_key, {})
+        if not isinstance(r_data, dict):
+            raise PolicyValidationError(f"Invalid roles.{role_key} configuration: expected table")
         rc_enum = RoleClass(role_key)
-        effort_str = r_data.get("effort", "medium").lower()
-        try:
-            effort = EffortLevel(effort_str)
-        except ValueError:
+
+        if "effort" in r_data:
+            effort_str = r_data["effort"]
+            if not isinstance(effort_str, str):
+                raise PolicyValidationError(
+                    f"Invalid type for roles.{role_key}.effort: expected string, got {type(effort_str).__name__}"
+                )
+            try:
+                effort = EffortLevel(effort_str.lower())
+            except ValueError:
+                valid_efforts = [x.value for x in EffortLevel]
+                raise PolicyValidationError(
+                    f"Invalid effort '{effort_str}' for role '{role_key}'. Valid options: {valid_efforts}"
+                )
+        else:
             effort = EffortLevel.MEDIUM
 
         roles[rc_enum] = RoleConfig(
@@ -247,14 +276,40 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
     # Agents
     agents: dict[str, AgentConfig] = {}
     agents_sec = data.get("agents", {})
+    if not isinstance(agents_sec, dict):
+        raise PolicyValidationError("Invalid [agents] section: expected table")
     default_policy = get_default_policy()
 
     for agent_key, a_data in agents_sec.items():
-        role_str = a_data.get("model_role", "support").lower()
-        try:
-            m_role = RoleClass(role_str)
-        except ValueError:
+        if not isinstance(a_data, dict):
+            raise PolicyValidationError(
+                f"Invalid definition for agent '{agent_key}': expected table"
+            )
+
+        if "model_role" in a_data:
+            role_str = a_data["model_role"]
+            if not isinstance(role_str, str):
+                raise PolicyValidationError(
+                    f"Invalid type for agents.{agent_key}.model_role: expected string, got {type(role_str).__name__}"
+                )
+            try:
+                m_role = RoleClass(role_str.lower())
+            except ValueError:
+                valid_roles = [x.value for x in RoleClass]
+                raise PolicyValidationError(
+                    f"Invalid model_role '{role_str}' for agent '{agent_key}'. Valid options: {valid_roles}"
+                )
+        else:
             m_role = RoleClass.SUPPORT
+
+        if "read_only" in a_data and not isinstance(a_data["read_only"], bool):
+            raise PolicyValidationError(
+                f"Invalid type for agents.{agent_key}.read_only: expected boolean, got {type(a_data['read_only']).__name__}"
+            )
+        if "enabled" in a_data and not isinstance(a_data["enabled"], bool):
+            raise PolicyValidationError(
+                f"Invalid type for agents.{agent_key}.enabled: expected boolean, got {type(a_data['enabled']).__name__}"
+            )
 
         default_agent = default_policy.agents.get(agent_key)
         fallback_prompt = default_agent.system_prompt if default_agent else ""
@@ -271,15 +326,47 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
 
     # Permissions
     perm_sec = data.get("permissions", {})
-    try:
-        ask_app = ApprovalPolicy(perm_sec.get("ask_approval", "on-request").lower())
-    except ValueError:
+    if not isinstance(perm_sec, dict):
+        raise PolicyValidationError("Invalid [permissions] section: expected table")
+
+    if "ask_approval" in perm_sec:
+        ask_raw = perm_sec["ask_approval"]
+        if not isinstance(ask_raw, str):
+            raise PolicyValidationError(
+                f"Invalid type for permissions.ask_approval: expected string, got {type(ask_raw).__name__}"
+            )
+        try:
+            ask_app = ApprovalPolicy(ask_raw.lower())
+        except ValueError:
+            valid_policies = [x.value for x in ApprovalPolicy]
+            raise PolicyValidationError(
+                f"Invalid permissions.ask_approval '{ask_raw}'. Valid options: {valid_policies}"
+            )
+    else:
         ask_app = ApprovalPolicy.ON_REQUEST
 
-    try:
-        sbox = SandboxMode(perm_sec.get("sandbox", "workspace-write").lower())
-    except ValueError:
+    if "sandbox" in perm_sec:
+        sandbox_raw = perm_sec["sandbox"]
+        if not isinstance(sandbox_raw, str):
+            raise PolicyValidationError(
+                f"Invalid type for permissions.sandbox: expected string, got {type(sandbox_raw).__name__}"
+            )
+        try:
+            sbox = SandboxMode(sandbox_raw.lower())
+        except ValueError:
+            valid_sandboxes = [x.value for x in SandboxMode]
+            raise PolicyValidationError(
+                f"Invalid permissions.sandbox '{sandbox_raw}'. Valid options: {valid_sandboxes}"
+            )
+    else:
         sbox = SandboxMode.WORKSPACE_WRITE
+
+    if "allow_dangerous_bypass" in perm_sec and not isinstance(
+        perm_sec["allow_dangerous_bypass"], bool
+    ):
+        raise PolicyValidationError(
+            f"Invalid type for permissions.allow_dangerous_bypass: expected boolean, got {type(perm_sec['allow_dangerous_bypass']).__name__}"
+        )
 
     permissions = PermissionsConfig(
         allow_dangerous_bypass=bool(perm_sec.get("allow_dangerous_bypass", False)),

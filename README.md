@@ -93,6 +93,9 @@ howlalign restore ~/.local/state/howlalign/backups/<backup_folder>
 
 # Overwrite even if files have drifted after apply
 howlalign restore ~/.local/state/howlalign/backups/<backup_folder> --force
+
+# Restore to an authorized cross-mount workspace
+howlalign restore ~/.local/state/howlalign/backups/<backup_folder> --workspace /path/to/target/repo
 ```
 
 ### 6. Diagnostics
@@ -109,12 +112,15 @@ howlalign doctor --scope all
 ## Security Guarantees
 
 HowlAlign operates under strict configuration safety rules:
-- **User Provenance Protection:** Automatically tags and preserves user-authored subagents and rules lacking HowlAlign provenance markers.
-- **Fail-Closed Parsing:** Halts with explicit `ConfigurationParseError` rather than resetting or corrupting malformed configurations.
+- **Backup Integrity Verification:** Computes SHA-256 checksums before restore and matches against original pre-apply hashes; rejects corrupted or tampered backups fail-closed (`--force` never bypasses backup integrity).
+- **Target Drift Detection:** Restore operations refuse to overwrite target files that have drifted or been deleted after apply unless `--force` is specified.
+- **Cross-Mount Authorization:** Requires explicit `--workspace` / `-w` authorization to restore files outside the current working tree, preventing path-traversal attacks via malicious manifests.
+- **Truthful Rollback Reporting:** Accurately reports rollback outcomes (`SUCCEEDED`, `PARTIAL`, `FAILED`) and tracks un-reverted files rather than claiming success unconditionally.
+- **User Provenance Protection & Fingerprinting:** Tags managed files with cryptographic fingerprints (`# howlalign: fingerprint = ...`) and bounds detection to header lines; detects and protects user-customized files from overwrite.
+- **Fail-Closed Configuration & Policy Safety:** Halts with explicit domain exceptions (`ConfigurationParseError`, `PolicyValidationError`) rather than resetting or corrupting malformed configurations.
 - **Dedicated Private Backups:** Backups are stored in user-private XDG state locations with restrictive permissions (`0o700` directories, `0o600` files), preventing accidental git commits.
-- **Target Drift Detection:** Restore operations refuse to overwrite target files that have drifted after apply unless `--force` is specified.
 - **Atomic Operations & Permission Preservation:** Writes target configurations through atomic temporary replacements, preserving file modes on existing configurations.
-- **Secret Isolation & Masking:** Sensitive credentials, tokens, and authorization headers are masked in all diff previews and diagnostics.
+- **Secret Isolation & Masking:** Sensitive credentials, private keys, tokens, and authorization headers are masked in all diff previews and diagnostics without double-redaction or leaking prefixes.
 - **Zero Unrelated Overwrite:** Preserves existing unrelated settings and tables in JSON and TOML configuration files.
 - **No Silent Permission Bypasses:** Never enables `--dangerously-skip-permissions` or unrestricted sandbox bypasses without explicit user policy intent.
 - **Isolated Testing:** Integration and unit tests run in hermetic, disposable fixture directories.

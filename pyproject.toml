@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "howlalign"
-version = "0.1.1"
+version = "0.1.2"
 description = "Provider-agnostic AI coding assistant configuration, model preferences, specialized agents, and workflow alignment"
 readme = "README.md"
 requires-python = ">=3.11"

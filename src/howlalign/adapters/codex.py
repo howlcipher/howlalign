@@ -8,8 +8,14 @@ from typing import Any
 
 import toml
 
-from howlalign.adapters.base import BaseAdapter, is_file_managed_by_howlalign, safe_read_text
-from howlalign.core.constants import MANAGED_BY_MARKER_TOML
+from howlalign.adapters.base import (
+    BaseAdapter,
+    compute_managed_fingerprint,
+    has_user_modifications,
+    is_file_managed_by_howlalign,
+    safe_read_text,
+)
+from howlalign.core.constants import MANAGED_BY_MARKER_MD, MANAGED_BY_MARKER_TOML
 from howlalign.core.exceptions import ConfigurationParseError
 from howlalign.core.models import (
     ApprovalPolicy,
@@ -135,7 +141,9 @@ class CodexAdapter(BaseAdapter):
         if read_only:
             role_data["sandbox_mode"] = "read-only"
 
-        return f"# {MANAGED_BY_MARKER_TOML}\n" + toml.dumps(role_data)
+        role_body = toml.dumps(role_data)
+        fp = compute_managed_fingerprint(role_body)
+        return f'# {MANAGED_BY_MARKER_TOML}\n# managed_fingerprint = "{fp}"\n' + role_body
 
     def generate_changes(
         self,
@@ -169,21 +177,32 @@ class CodexAdapter(BaseAdapter):
             role_file = agents_dir / f"{agent_name}.toml"
             existing_role = safe_read_text(role_file)
 
-            # Conflict Detection: Preserve user-authored agent files
-            if existing_role is not None and not is_file_managed_by_howlalign(
-                existing_role, "toml"
-            ):
-                changes.append(
-                    ConfigChange(
-                        file_path=role_file,
-                        original_content=existing_role,
-                        proposed_content=existing_role,
-                        description=f"User-authored Codex agent role '{agent_name}' detected. Preserved without modification.",
-                        provider=ProviderType.CODEX,
-                        is_user_owned_conflict=True,
+            # Conflict Detection: Preserve user-authored or user-modified agent files
+            if existing_role is not None:
+                if not is_file_managed_by_howlalign(existing_role, "toml"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=role_file,
+                            original_content=existing_role,
+                            proposed_content=existing_role,
+                            description=f"User-authored Codex agent role '{agent_name}' detected. Preserved without modification.",
+                            provider=ProviderType.CODEX,
+                            is_user_owned_conflict=True,
+                        )
                     )
-                )
-                continue
+                    continue
+                elif has_user_modifications(existing_role, "toml"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=role_file,
+                            original_content=existing_role,
+                            proposed_content=existing_role,
+                            description=f"User modifications detected in managed Codex agent role '{agent_name}'. Preserved without modification.",
+                            provider=ProviderType.CODEX,
+                            is_user_owned_conflict=True,
+                        )
+                    )
+                    continue
 
             agent_role_class = agent_cfg.model_role
             role_cfg = policy.roles.get(agent_role_class)
@@ -217,7 +236,7 @@ class CodexAdapter(BaseAdapter):
 
             if existing_agents_md is None:
                 proposed_agents_md = f"""# AGENTS.md
-<!-- {MANAGED_BY_MARKER_TOML} -->
+<!-- {MANAGED_BY_MARKER_MD} -->
 
 Repository engineering conventions aligned via HowlAlign (policy v{policy.schema_version}).
 

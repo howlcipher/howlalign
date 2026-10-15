@@ -74,6 +74,18 @@ class SecretExposureError(SafetyViolationError):
     pass
 
 
+class BackupCorruptedError(SafetyViolationError):
+    """Raised when backup artifact integrity check fails or file is corrupted."""
+
+    pass
+
+
+class ManifestValidationError(SafetyViolationError):
+    """Raised when backup manifest schema or paths fail validation."""
+
+    pass
+
+
 # Execution & Transaction Errors
 class ExecutionError(HowlAlignError):
     """Base exception for file operation and execution failures."""

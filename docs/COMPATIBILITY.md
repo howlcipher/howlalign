@@ -58,12 +58,14 @@ This document summarizes native capability translations, evaluated versions, and
   - Workspace Agents: `.agents/agents/<name>/agent.md`
 - **Supported Capabilities:**
   - Model selection: `gemini-3.8-flash-high`, `gemini-3.8-flash-medium`, `gemini-3.8-flash-low`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`.
-  - Thinking effort levels via `--effort <low|medium|high|xhigh|max>`.
+  - Thinking effort levels via `--effort <low|medium|high|xhigh|max>` and `settings.json` (`effort`).
   - Execution modes: `accept-edits`, `auto` (with safety reviewer agent), `plan`.
   - Progressive skills (`SKILL.md` with YAML frontmatter + scripts/references).
-  - Custom markdown agents (`agent.md` with YAML frontmatter `subagent: true`, `model`).
+  - Custom markdown agents (`agent.md` with YAML frontmatter `subagent: true`, `model`, and SHA-256 fingerprint).
   - Tool permission modes: `proceed-in-sandbox`, `always-proceed`, `request-review`.
 - **Unsupported / Restricted Behaviors:**
+  - `settings.json` schema does not recognize fabricated keys such as `planningModel`. HowlAlign strictly generates valid keys (`model`, `effort`) and Doctor flags deprecated `planningModel` in legacy configurations.
   - Rule files have a hard **24 KB (24,000 bytes)** cap per file. Files exceeding this are truncated by the CLI. HowlAlign doctor validates rule file sizes.
   - Aggregate rules budget is **20,000 tokens**. Over-budget rules are demoted to on-demand file pointers.
   - Automatic runtime model switching requires multi-agent delegation or CLI `--model` specification.
+

@@ -19,6 +19,7 @@ from howlalign.core.models import (
     ConfigChange,
     ProviderInfo,
     ProviderType,
+    RecoveryState,
     Scope,
 )
 from howlalign.core.policy import discover_policy_file, get_default_policy, load_policy_file
@@ -244,7 +245,25 @@ class AlignmentEngine:
             click.secho("✗ Failed to apply configuration changes!", fg="red", err=True)
             for err in result.errors:
                 click.secho(f"  Error: {err}", fg="red", err=True)
-            if result.rolled_back:
+            if result.recovery_state == RecoveryState.SUCCEEDED:
+                click.secho(
+                    "  [ROLLBACK] All partially applied files were reverted successfully.",
+                    fg="yellow",
+                )
+            elif result.recovery_state == RecoveryState.PARTIAL:
+                click.secho(
+                    f"  [ROLLBACK WARNING] Partial rollback! The following files could not be reverted: {result.remaining_modified_files}",
+                    fg="red",
+                    err=True,
+                )
+            elif result.recovery_state == RecoveryState.FAILED:
+                click.secho(
+                    f"  [ROLLBACK FAILED] Rollback could not revert files: {result.remaining_modified_files}. "
+                    f"Manual recovery required from backup directory: {result.backup_dir}",
+                    fg="red",
+                    err=True,
+                )
+            elif result.rolled_back:
                 click.secho(
                     "  [ROLLBACK] All partially applied files were reverted successfully.",
                     fg="yellow",

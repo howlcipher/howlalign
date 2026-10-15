@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from howlalign.adapters.base import BaseAdapter, is_file_managed_by_howlalign, safe_read_text
+from howlalign.adapters.base import (
+    BaseAdapter,
+    compute_managed_fingerprint,
+    has_user_modifications,
+    is_file_managed_by_howlalign,
+    safe_read_text,
+)
 from howlalign.core.constants import MANAGED_BY_MARKER_MD
 from howlalign.core.exceptions import ConfigurationParseError
 from howlalign.core.models import (
@@ -92,8 +98,20 @@ class ClaudeAdapter(BaseAdapter):
     ) -> str:
         tools_formatted = "\n".join(f"  - {t}" for t in tools)
         disallowed_formatted = "\n".join(f"  - {t}" for t in disallowed_tools)
+        core_body = f"""name: {name}
+description: {description}
+tools:
+{tools_formatted}
+disallowedTools:
+{disallowed_formatted}
+model: {model}
+permissionMode: {permission_mode}
+
+{prompt.strip()}"""
+        fp = compute_managed_fingerprint(core_body)
         return f"""---
 managed_by: howlalign
+managed_fingerprint: {fp}
 name: {name}
 description: {description}
 tools:
@@ -160,21 +178,32 @@ permissionMode: {permission_mode}
             agent_file = agents_dir / f"{agent_name}.md"
             existing_agent = safe_read_text(agent_file)
 
-            # Conflict Detection: Avoid silently overwriting user-authored agent files
-            if existing_agent is not None and not is_file_managed_by_howlalign(
-                existing_agent, "md"
-            ):
-                changes.append(
-                    ConfigChange(
-                        file_path=agent_file,
-                        original_content=existing_agent,
-                        proposed_content=existing_agent,
-                        description=f"User-authored custom agent '{agent_name}' detected. Preserved without modification.",
-                        provider=ProviderType.CLAUDE,
-                        is_user_owned_conflict=True,
+            # Conflict Detection: Avoid silently overwriting user-authored or user-modified agent files
+            if existing_agent is not None:
+                if not is_file_managed_by_howlalign(existing_agent, "md"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=agent_file,
+                            original_content=existing_agent,
+                            proposed_content=existing_agent,
+                            description=f"User-authored custom agent '{agent_name}' detected. Preserved without modification.",
+                            provider=ProviderType.CLAUDE,
+                            is_user_owned_conflict=True,
+                        )
                     )
-                )
-                continue
+                    continue
+                elif has_user_modifications(existing_agent, "md"):
+                    changes.append(
+                        ConfigChange(
+                            file_path=agent_file,
+                            original_content=existing_agent,
+                            proposed_content=existing_agent,
+                            description=f"User modifications detected in managed agent '{agent_name}'. Preserved without modification.",
+                            provider=ProviderType.CLAUDE,
+                            is_user_owned_conflict=True,
+                        )
+                    )
+                    continue
 
             # Determine tools based on configuration or default map
             tool_spec = agent_tool_map.get(
