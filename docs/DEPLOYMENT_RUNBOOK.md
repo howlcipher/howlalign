@@ -1,11 +1,11 @@
-# HowlAlign v0.1.4 Operator Deployment Runbook
+# HowlAlign v0.1.5 Operator Deployment Runbook
 
 ## Controlled Read-Only Evaluation on Host Environment (Bazzite / Linux)
 
-This runbook guides operators through an authorized, controlled evaluation of HowlAlign v0.1.4 against real installed coding assistants (**Claude Code**, **OpenAI Codex CLI**, and **Google Antigravity CLI / AGY**).
+This runbook guides operators through an authorized, controlled evaluation of HowlAlign v0.1.5 against real installed coding assistants (**Claude Code**, **OpenAI Codex CLI**, and **Google Antigravity CLI / AGY**).
 
 > [!IMPORTANT]
-> **Safety Guarantee**: Steps 1 through 7 are **strictly read-only**. They do NOT modify `~/.claude`, `~/.codex`, `~/.gemini`, or `~/.config/howlalign`. Do NOT run `howlalign apply` on real user configurations without explicit authorization and manual pre-adoption backups.
+> **Safety Guarantee**: Steps 1 through 8 are **strictly read-only**. They do NOT modify `~/.claude`, `~/.codex`, `~/.gemini`, or `~/.config/howlalign`. Do NOT run `howlalign apply` on real user configurations without explicit authorization and manual pre-adoption backups.
 
 ---
 
@@ -26,7 +26,7 @@ pip install -e .
 
 # Confirm installed version
 howlalign --version
-# Expected: howlalign, version 0.1.4
+# Expected: howlalign, version 0.1.5
 ```
 
 ---
@@ -42,7 +42,7 @@ howlalign check --scope all
 **What to verify in output**:
 - **Claude Code**: Shows detected executable (`claude`), evaluated version (e.g. `2.1.301`), and paths (`~/.claude/settings.json`).
 - **OpenAI Codex CLI**: Shows detected executable (`codex`), evaluated version (e.g. `0.162.1`), and paths (`~/.codex/config.toml`).
-- **Google Antigravity CLI (AGY)**: Shows detected executable (`agy`), evaluated version (e.g. `1.3.6`), and global paths (`~/.gemini/antigravity-cli/settings.json`).
+- **Google Antigravity CLI (AGY)**: Shows detected executable (`agy`), evaluated version (e.g. `1.3.6` / `1.4.0`), and global paths (`~/.gemini/antigravity-cli/settings.json`).
 
 ---
 
@@ -63,7 +63,29 @@ howlalign init --help
 
 ---
 
-## 4. Inspect Current Configuration Drift
+## 4. Inspect Effective Policy Matrix (`howlalign explain`)
+
+Audit the fully resolved configuration matrix per provider and role, confirming independent reasoning effort and permission resolution:
+
+```bash
+# Print formatted effective matrix
+howlalign explain --scope all
+
+# Inspect a specific provider
+howlalign explain --provider agy
+
+# Output machine-readable JSON for automated verification
+howlalign explain --json
+```
+
+**What to verify in output**:
+- Check that each role displays independent models and effort levels per provider.
+- Verify source attribution (e.g. `roles.implementation.provider_effort.codex` vs fallback `roles.implementation.effort`).
+- Confirm provider-specific approval and sandbox settings (`ask_approval`, `sandbox`, `allow_dangerous_bypass`).
+
+---
+
+## 5. Inspect Current Configuration Drift
 
 Check for configuration differences between the desired policy and the actual state on disk across all scopes:
 
@@ -83,7 +105,7 @@ howlalign check --scope all
 
 ---
 
-## 5. Preview Exact Unified Diffs
+## 6. Preview Exact Unified Diffs & Security Alerts
 
 Examine the exact unified diffs HowlAlign proposes applying. Sensitive tokens, API keys, and authorization headers are automatically masked:
 
@@ -96,14 +118,15 @@ howlalign diff --scope project
 ```
 
 **What to review in diff previews**:
+- **Permission Widening Alerts**: If proposed changes weaken security boundaries (e.g. `approval_policy = "never"`, `toolPermission = "always-proceed"`, `sandbox_mode = "danger-full-access"`), verify the `[SECURITY ALERT]` header is prominently displayed.
 - Confirm that existing custom tables in `config.toml` or unrelated keys in `settings.json` are preserved.
-- Verify model identifiers (`opusplan`, `gpt-6.1-sol`, `gemini-3.8-flash-high`).
-- Confirm thinking effort levels (`medium`, `high`).
+- Verify model identifiers (`opusplan`, `gpt-6.1-sol`, `Gemini 3.8 Flash (High)`).
+- Confirm thinking effort levels per provider.
 - Notice that secret tokens appear as `****[REDACTED]****`.
 
 ---
 
-## 6. Identify Conflicting Custom Agents
+## 7. Identify Conflicting Custom Agents
 
 HowlAlign detects and protects user-authored custom agents from accidental overwrite:
 
@@ -115,11 +138,11 @@ howlalign doctor --scope all
 **Conflict Detection Rules**:
 1. **User-authored files** (lacking `# managed_by = "howlalign"` or YAML frontmatter `managed_by: howlalign`) are detected as conflicts and are **NEVER overwritten**.
 2. **User-modified managed files** (where stored cryptographic fingerprint diverges from current file content) are preserved as conflicts and require manual review.
-3. **Untouched managed files** (matching canonical v0.1.4 fingerprint or verified legacy baseline) are safely updateable.
+3. **Untouched managed files** (matching canonical v0.1.4/v0.1.5 fingerprint or verified legacy baseline) are safely updateable.
 
 ---
 
-## 7. Examine Permission Changes & Diagnostics
+## 8. Examine Permission Changes & Diagnostics
 
 Run security, sandbox mode, and rule budget health checks:
 
@@ -128,6 +151,9 @@ howlalign doctor --scope global
 ```
 
 **Key health checks evaluated**:
+- **Effective Provider Permissions**: Reports effective approval, sandbox, and dangerous bypass authorization per enabled provider.
+- **Permission Escalation Warnings**: Warns if dangerous execution modes are active without explicit policy authorization.
+- **Codex TOML Comments Notice**: Alerts operator if `~/.codex/config.toml` contains human comments that will not be preserved upon rewrite.
 - **Codex CLI Project Trust**: Verifies if workspace path is registered as trusted in `~/.codex/config.toml` (`[projects."<path>"] trust_level = "trusted"`).
 - **AGY Rule Size Cap**: Verifies rule files (`GEMINI.md`, `AGENTS.md`) do not exceed the 24,000 bytes (24 KB) hard limit.
 - **Leaked Secrets**: Scans target files for unredacted authorization headers, API tokens, or private keys.
@@ -135,7 +161,7 @@ howlalign doctor --scope global
 
 ---
 
-## 8. Create a Manual Snapshot Before Adoption
+## 9. Create a Manual Snapshot Before Adoption
 
 Before authorizing any real configuration changes, create an independent manual snapshot of your active assistant configurations:
 
@@ -154,7 +180,7 @@ echo "Manual snapshot successfully created at: $SNAPSHOT_DIR"
 
 ---
 
-## 9. Apply Configuration (One Provider at a Time)
+## 10. Apply Configuration (One Provider at a Time)
 
 When explicitly authorized, apply changes selectively and review backups:
 
@@ -171,7 +197,7 @@ howlalign apply --scope global
 
 ---
 
-## 10. Safe Restore from Backup
+## 11. Safe Restore from Backup
 
 If unexpected behavior occurs, revert immediately using HowlAlign's built-in restore engine:
 
@@ -181,6 +207,7 @@ ls -la ~/.local/state/howlalign/backups/
 
 # Restore from a timestamped backup directory
 howlalign restore ~/.local/state/howlalign/backups/<workspace_key>/<timestamp>/
+
 
 # If target files drifted after apply, force restore with explicit authorization:
 howlalign restore ~/.local/state/howlalign/backups/<workspace_key>/<timestamp>/ --force

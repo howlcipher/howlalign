@@ -98,13 +98,93 @@ howlalign restore ~/.local/state/howlalign/backups/<backup_folder> --force
 howlalign restore ~/.local/state/howlalign/backups/<backup_folder> --workspace /path/to/target/repo
 ```
 
-### 6. Diagnostics
+### 6. Explain Effective Policy Matrix
 
-Run configuration, rule budget, and security diagnostics:
+Inspect the fully resolved effective configuration matrix per provider and role, including exact source attribution and permission settings:
+
+```bash
+# Print formatted effective matrix
+howlalign explain
+
+# Inspect a specific provider
+howlalign explain --provider agy
+
+# Output machine-readable JSON
+howlalign explain --json
+```
+
+### 7. Diagnostics
+
+Run configuration, rule budget, security diagnostics, and permission widening alerts:
 
 ```bash
 howlalign doctor
 howlalign doctor --scope all
+```
+
+---
+
+## Provider-Specific Policy Engine (v0.1.5)
+
+HowlAlign v0.1.5 enables fine-grained, independent control of reasoning effort and permission boundaries across providers without cross-provider coupling:
+
+```toml
+schema_version = "0.1.5"
+
+[providers]
+enabled = ["agy"]
+
+[roles.planning]
+claude_model = "claude-opus-5"
+codex_model = "gpt-6.1-sol"
+agy_model = "Gemini 3.8 Flash (High)"
+effort = "high"
+
+[roles.planning.provider_effort]
+claude = "high"
+codex = "high"
+agy = "high"
+
+[roles.implementation]
+claude_model = "claude-sonnet-5"
+codex_model = "gpt-6.1-sol"
+agy_model = "Gemini 3.8 Flash (High)"
+effort = "medium"
+
+[roles.implementation.provider_effort]
+claude = "medium"
+codex = "low"
+agy = "high"
+
+[roles.support]
+claude_model = "claude-haiku-4"
+codex_model = "gpt-5.6-luna"
+agy_model = "Gemini 3.8 Flash (High)"
+effort = "low"
+
+[roles.support.provider_effort]
+claude = "low"
+codex = "low"
+agy = "high"
+
+[permissions]
+ask_approval = "on-request"
+sandbox = "workspace-write"
+allow_dangerous_bypass = false
+
+[permissions.providers.agy]
+ask_approval = "never"
+sandbox = "danger-full-access"
+allow_dangerous_bypass = true
+
+[permissions.providers.codex]
+ask_approval = "never"
+sandbox = "danger-full-access"
+allow_dangerous_bypass = true
+
+[permissions.providers.claude]
+ask_approval = "on-request"
+sandbox = "workspace-write"
 ```
 
 ---

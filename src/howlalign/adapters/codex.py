@@ -62,15 +62,14 @@ class CodexAdapter(BaseAdapter):
             except Exception as err:
                 raise ConfigurationParseError(cfg_path, "TOML", err) from err
 
-        # 1. Model resolution
-        impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
-        if impl_role:
-            data["model"] = impl_role.codex_model
-            data["model_reasoning_effort"] = impl_role.effort.value
-
-        plan_role = policy.roles.get(RoleClass.PLANNING)
-        if plan_role:
-            data["plan_mode_reasoning_effort"] = plan_role.effort.value
+        # 1. Model and reasoning effort resolution via centralized engine
+        data["model"] = policy.get_effective_model(ProviderType.CODEX, RoleClass.IMPLEMENTATION)
+        data["model_reasoning_effort"] = policy.get_effective_effort(
+            ProviderType.CODEX, RoleClass.IMPLEMENTATION
+        ).value
+        data["plan_mode_reasoning_effort"] = policy.get_effective_effort(
+            ProviderType.CODEX, RoleClass.PLANNING
+        ).value
 
         # Note: default_subagent_model and default_subagent_reasoning_effort are not recognized
         # by Codex CLI in config.toml (triggers unrecognized setting warnings under --strict-config).
@@ -79,25 +78,23 @@ class CodexAdapter(BaseAdapter):
         data.pop("default_subagent_model", None)
         data.pop("default_subagent_reasoning_effort", None)
 
-        # Honor explicit provider overrides
-        codex_overrides = policy.overrides.get("codex", {})
-        if "model_reasoning_effort" in codex_overrides:
-            data["model_reasoning_effort"] = codex_overrides["model_reasoning_effort"]
-        if "plan_mode_reasoning_effort" in codex_overrides:
-            data["plan_mode_reasoning_effort"] = codex_overrides["plan_mode_reasoning_effort"]
+        # 2. Permissions resolution via centralized engine
+        eff_perms = policy.get_effective_permissions(ProviderType.CODEX)
 
-        # 2. Sandbox mode
-        if policy.permissions.sandbox == SandboxMode.READ_ONLY:
+        if eff_perms.sandbox == SandboxMode.READ_ONLY:
             data["sandbox_mode"] = "read-only"
-        elif policy.permissions.sandbox == SandboxMode.DANGER_FULL_ACCESS:
+        elif eff_perms.sandbox == SandboxMode.DANGER_FULL_ACCESS:
             data["sandbox_mode"] = "danger-full-access"
         else:
             data["sandbox_mode"] = "workspace-write"
 
         # 3. Approval policy
-        if policy.permissions.ask_approval == ApprovalPolicy.NEVER:
+        if eff_perms.ask_approval == ApprovalPolicy.NEVER:
             data["approval_policy"] = "never"
             data["approvals_reviewer"] = "auto_review"
+        elif eff_perms.ask_approval == ApprovalPolicy.ALWAYS:
+            data["approval_policy"] = "always"
+            data["approvals_reviewer"] = "user"
         else:
             data["approval_policy"] = "on-request"
             data["approvals_reviewer"] = "user"
@@ -205,9 +202,8 @@ class CodexAdapter(BaseAdapter):
                     continue
 
             agent_role_class = agent_cfg.model_role
-            role_cfg = policy.roles.get(agent_role_class)
-            model = role_cfg.codex_model if role_cfg else "gpt-6.1-sol"
-            effort = role_cfg.effort.value if role_cfg else "medium"
+            model = policy.get_effective_model(ProviderType.CODEX, agent_role_class)
+            effort = policy.get_effective_effort(ProviderType.CODEX, agent_role_class).value
 
             proposed_role = self._generate_role_toml(
                 name=agent_name,
@@ -308,6 +304,26 @@ Repository engineering conventions aligned via HowlAlign (policy v{policy.schema
                                 action="Run 'howlalign apply' to align config.toml to native schema.",
                             )
                         )
+                    # Check for human comments in existing config.toml
+                    comment_lines = [
+                        line
+                        for line in content.splitlines()
+                        if line.strip().startswith("#")
+                        and not line.strip().startswith("# managed_fingerprint")
+                    ]
+                    if comment_lines:
+                        items.append(
+                            DiagnosticItem(
+                                severity="INFO",
+                                category="COMPATIBILITY",
+                                message=(
+                                    f"Existing Codex config at '{cfg_path}' contains {len(comment_lines)} comment line(s). "
+                                    "Note that native TOML deserialization preserves all semantic keys, tables, and project trust, but does not preserve in-file comments upon rewrite."
+                                ),
+                                provider="codex",
+                                action="Verify diff with 'howlalign diff --provider codex' before applying.",
+                            )
+                        )
                 except Exception as err:
                     items.append(
                         DiagnosticItem(
@@ -318,6 +334,29 @@ Repository engineering conventions aligned via HowlAlign (policy v{policy.schema
                             action="Repair syntax in config.toml to enable alignment.",
                         )
                     )
+
+        # Check conflicting settings
+        for conflict in policy.get_conflicting_settings(ProviderType.CODEX):
+            items.append(
+                DiagnosticItem(
+                    severity="INFO",
+                    category="CONFIGURATION",
+                    message=conflict,
+                    provider="codex",
+                )
+            )
+
+        # Check permission escalation
+        for escalation in policy.detect_permission_escalation(ProviderType.CODEX):
+            items.append(
+                DiagnosticItem(
+                    severity="WARNING",
+                    category="SECURITY",
+                    message=escalation,
+                    provider="codex",
+                    action="Review permissions.providers.codex to ensure widening was intended.",
+                )
+            )
 
         # Check existing agent files for invalid managed_by in TOML body
         agents_dir = self._get_agents_dir(is_global)

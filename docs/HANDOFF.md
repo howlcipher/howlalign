@@ -8,50 +8,54 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
 
 ---
 
-## Milestone Status: v0.1.4 Final Correctness, Native Compatibility & Deployment Readiness Verified
+### Milestone Status: v0.1.5 Provider-Specific Policy Engine & Independence Verified
 - **Repository**: `https://github.com/howlcipher/howlalign`
 - **Local Path**: `/run/media/system/tallgeese/dev/howlalign`
 - **Current Branch**: `main`
-- **Version**: `0.1.4` (bumped in `pyproject.toml`, `src/howlalign/__init__.py`, and `src/howlalign/core/writer.py`)
-- **Verification Status**: 89/89 unit and integration tests passing; ruff format and lint clean; package build clean.
+- **Version**: `0.1.5` (bumped in `pyproject.toml`, `src/howlalign/__init__.py`, and `src/howlalign/core/constants.py`)
+- **Verification Status**: 111/111 unit and integration tests passing; ruff format and lint clean; package build clean.
 - **Critical Isolation**: Zero real user AI assistant configurations (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.config/howlalign`) modified. All tests run in isolated `tmp_path` disposable environments with hermetic test environment fixtures (`conftest.py`).
 
 ---
 
-## v0.1.4 Deliverables & Verifications
+## v0.1.5 Deliverables & Verifications
 
-1. **Whitespace-Preserving Canonical Document Fingerprinting**:
-   - Eliminated line-stripping in `compute_managed_fingerprint()` (`src/howlalign/adapters/base.py`).
-   - Normalizes line endings (`\r\n` -> `\n`) while preserving exact leading indentation, trailing spaces, blank lines, and line ordering.
-   - Accurately strips only the designated self-referential header fingerprint comment within document header (`idx < 30`).
-   - Detects all semantic and formatting changes across YAML frontmatter, Markdown, and TOML formats.
+1. **Provider-Specific Role Effort Engine**:
+   - Added `provider_effort: dict[ProviderType, EffortLevel]` to `RoleConfig` with fallback methods.
+   - Centralized 4-tier precedence resolution on `Policy.get_effective_effort()`.
+   - Claude, Codex, and AGY resolve planning, implementation, and support reasoning effort independently without cross-provider side effects.
 
-2. **Conservative Multi-Version Migration**:
-   - Implemented conservative migration in `has_user_modifications()` covering v0.1.4, legacy v0.1.3, and legacy v0.1.2 formats.
-   - Detects whitespace tampering in legacy v0.1.3 files via `has_whitespace_modifications()`.
-   - Untouched legacy files with clean whitespace are safely upgraded to v0.1.4 on apply.
-   - Fails closed on any modified, tampered, or missing fingerprints, protecting human customizations from silent overwrite.
+2. **Provider-Specific Permissions & Autonomy Engine**:
+   - Added `ProviderPermissionsConfig`, `EffectivePermissions`, and `permissions.providers.<provider>` schema.
+   - Decoupled approval policy and sandbox isolation per provider.
+   - Centralized resolution on `Policy.get_effective_permissions()`.
+   - Allows safe representation of unrestricted environments (`never`, `danger-full-access`) for authorized providers while keeping conservative defaults on others.
 
-3. **AGY CLI Compatibility & Validation Hardening**:
-   - Implemented `discover_agy_models()` in `src/howlalign/core/discovery.py` to query the live `agy models` CLI registry and strip terminal control sequences.
-   - Enhanced `discover_agy()` to discover `.agents/skills` and `.agents/agents` workspace directories.
-   - Added `"effort"` generation to global AGY `settings.json` from implementation role.
-   - Implemented YAML frontmatter validation (`name`, `description`, `model`) in `AgyAdapter.check_health()`.
+3. **Permission Escalation Safeguards & Differ Security Alerts**:
+   - Implemented `detect_permission_escalation()` on `Policy`.
+   - Differ automatically inspects diff hunks and prepends prominent `[SECURITY ALERT]` banners when permissions are widened.
+   - Doctor reports effective permissions per enabled provider and alerts when unconstrained execution is configured.
 
-4. **XDG State Home Precedence & Hermetic Isolation**:
-   - Implemented `get_default_backup_root()` in `src/howlalign/core/constants.py` enforcing strict precedence:
-     1. `$HOWLALIGN_BACKUP_DIR`
-     2. `$XDG_STATE_HOME/howlalign/backups/`
-     3. `<effective_home>/.local/state/howlalign/backups/`
-   - Added `tests/conftest.py` with an autouse hermetic fixture setting disposable `HOME`, `XDG_STATE_HOME`, and `HOWLALIGN_BACKUP_DIR`, completely isolating developer host state from test runs.
+4. **Policy Explainability Engine (`howlalign explain`)**:
+   - Added `AlignmentEngine.explain()` and CLI command `howlalign explain`.
+   - Supports formatted terminal output or JSON output (`--json`), with scoped provider filtering (`--provider`).
+   - Displays exact source provenance for every resolved model, effort, approval, and sandbox setting.
 
-5. **Deployment Runbook**:
-   - Authored comprehensive 10-step operator runbook in `docs/DEPLOYMENT_RUNBOOK.md` detailing non-destructive verification, safe backup verification, and rollback procedures.
+5. **Native Provider Translators Hardened**:
+   - Claude: Configures `modelSettings.<model>.effortLevel` independently across roles; maps `ask_approval = "never"` to `defaultMode = "acceptEdits"`.
+   - Codex: Maps implementation effort to `model_reasoning_effort` and planning effort to `plan_mode_reasoning_effort`; subagent roles resolve independent effort; detects human comments in existing `config.toml` and emits informational compatibility notices.
+   - AGY: Maps implementation effort to global `settings.json` `"effort"`; maps `ask_approval` and `sandbox` to `toolPermission` (`always-proceed`, `request-review`, `proceed-in-sandbox`) and `allowNonWorkspaceAccess = true`.
+
+6. **Comprehensive Test Suite & Hermetic Dogfooding**:
+   - Added `tests/test_v015_policy_engine.py` (20 tests covering provider independence, precedence tiers, invalid inputs, and comment preservation).
+   - Added `tests/test_dogfood_lifecycle.py` (2 hermetic E2E tests verifying complete init -> check -> diff -> apply -> restore lifecycle across all providers).
 
 ---
 
 ## Test & Quality Verification Results
-- **Pytest**: `89 passed in 6.14s` across 10 test modules:
+- **Pytest**: `111 passed in 7.42s` across 12 test modules:
+  - `tests/test_v015_policy_engine.py` (20 tests)
+  - `tests/test_dogfood_lifecycle.py` (2 tests)
   - `tests/test_v014_correctness.py` (24 tests)
   - `tests/test_v013_managed_files.py` (13 tests)
   - `tests/test_v012_remediation.py` (14 tests)
@@ -63,8 +67,8 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
   - `tests/test_policy.py` (4 tests)
   - `tests/test_writer.py` (4 tests)
 - **Ruff Lint**: `ruff check .` -> `All checks passed!`
-- **Ruff Format**: `ruff format --check .` -> `31 files already formatted`
-- **Package Build**: `uv build` -> successfully built wheel and sdist for `howlalign-0.1.4`.
+- **Ruff Format**: `ruff format --check .` -> `34 files already formatted`
+- **Package Build**: `uv build` -> successfully built wheel and sdist for `howlalign-0.1.5`.
 
 ---
 
@@ -74,3 +78,5 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
 - v0.1.2: Independent audit remediation, backup integrity verification, truthful rollback reporting, provenance fingerprinting, and AGY settings compatibility.
 - v0.1.3: Canonical managed-file fingerprint contract, v0.1.2 conservative migration, real native CLI compatibility validation, and full lifecycle verification.
 - v0.1.4: Whitespace-preserving fingerprint contract, multi-version migration hierarchy, AGY validation hardening & model discovery, XDG backup precedence, and deployment runbook.
+- v0.1.5: Provider-specific policy engine, independent reasoning effort & permissions, security escalation alerts, explainability CLI, and dogfood lifecycle verification.
+

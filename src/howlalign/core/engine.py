@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 import click
 
@@ -178,6 +178,112 @@ class AlignmentEngine:
                 action = "CREATE" if c.is_creation or c.original_content is None else "MODIFY"
                 click.echo(f"  [{action}] {c.file_path} ({c.provider.value})")
             click.echo("\nRun 'howlalign diff' to inspect changes, or 'howlalign apply' to align.")
+
+        return 0
+
+    def explain(self, provider_filter: str = "all", json_output: bool = False) -> int:
+        """Inspect and explain resolved effective policy across providers."""
+        providers_info = self.get_providers_info()
+        target_filter = provider_filter.lower()
+
+        data: dict[str, Any] = {
+            "policy_path": str(self.policy_path) if self.policy_path else None,
+            "policy_schema_version": self.policy.schema_version,
+            "scope": self.scope.value,
+            "providers": {},
+        }
+
+        all_provs = [ProviderType.CLAUDE, ProviderType.CODEX, ProviderType.AGY]
+        if target_filter != "all":
+            all_provs = [p for p in all_provs if p.value == target_filter]
+
+        for prov in all_provs:
+            info = providers_info.get(prov)
+            eff = self.policy.get_effective_provider_policy(prov)
+            conflicts = self.policy.get_conflicting_settings(prov)
+            escalations = self.policy.detect_permission_escalation(prov)
+
+            prov_dict = {
+                "enabled": eff.enabled,
+                "installed": info.installed if info else False,
+                "version": info.version if info else None,
+                "executable": info.executable_path if info else None,
+                "roles": {
+                    rc.value: {
+                        "model": r_set.model,
+                        "effort": r_set.effort.value,
+                        "effort_source": r_set.effort_source,
+                    }
+                    for rc, r_set in eff.roles.items()
+                },
+                "permissions": {
+                    "ask_approval": eff.permissions.ask_approval.value,
+                    "ask_approval_source": eff.permission_sources.get("ask_approval", "default"),
+                    "sandbox": eff.permissions.sandbox.value,
+                    "sandbox_source": eff.permission_sources.get("sandbox", "default"),
+                    "allow_dangerous_bypass": eff.permissions.allow_dangerous_bypass,
+                    "allow_dangerous_bypass_source": eff.permission_sources.get(
+                        "allow_dangerous_bypass", "default"
+                    ),
+                },
+                "conflicts": conflicts,
+                "permission_escalations": escalations,
+            }
+            data["providers"][prov.value] = prov_dict
+
+        if json_output:
+            click.echo(json.dumps(data, indent=2))
+            return 0
+
+        click.echo(f"=== HowlAlign Effective Policy Inspection [Scope: {self.scope.value}] ===")
+        if self.policy_path:
+            click.echo(f"Active Policy: {self.policy_path} (schema v{self.policy.schema_version})")
+        else:
+            click.secho(
+                "Active Policy: Using default in-memory policy (no howlalign.toml found).",
+                fg="yellow",
+            )
+        click.echo("")
+
+        for prov in all_provs:
+            prov_data = data["providers"][prov.value]
+            status = (
+                click.style("ENABLED", fg="green")
+                if prov_data["enabled"]
+                else click.style("DISABLED", fg="white", dim=True)
+            )
+            installed_str = "INSTALLED" if prov_data["installed"] else "NOT FOUND"
+            click.echo(f"Provider: {prov.value.upper():<8} [{status}] ({installed_str})")
+
+            click.echo("  Model & Effort Resolution:")
+            for rc_name, r_info in prov_data["roles"].items():
+                click.echo(
+                    f"    - {rc_name.capitalize():<14}: {r_info['model']} (effort: {r_info['effort']}, source: {r_info['effort_source']})"
+                )
+
+            click.echo("  Effective Permissions:")
+            p_info = prov_data["permissions"]
+            click.echo(
+                f"    - ask_approval:           {p_info['ask_approval']} (source: {p_info['ask_approval_source']})"
+            )
+            click.echo(
+                f"    - sandbox:                {p_info['sandbox']} (source: {p_info['sandbox_source']})"
+            )
+            click.echo(
+                f"    - allow_dangerous_bypass: {p_info['allow_dangerous_bypass']} (source: {p_info['allow_dangerous_bypass_source']})"
+            )
+
+            if prov_data["conflicts"]:
+                click.echo("  Notices / Conflicts:")
+                for c in prov_data["conflicts"]:
+                    click.secho(f"    ! {c}", fg="cyan")
+
+            if prov_data["permission_escalations"]:
+                click.echo("  Security Alerts:")
+                for e in prov_data["permission_escalations"]:
+                    click.secho(f"    ▲ {e}", fg="yellow", bold=True)
+
+            click.echo("")
 
         return 0
 

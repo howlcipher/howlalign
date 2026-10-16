@@ -121,6 +121,61 @@ def check_cmd(
         sys.exit(1)
 
 
+@cli.command("explain")
+@click.option(
+    "--config",
+    "config_path",
+    type=click.Path(exists=True, dir_okay=False),
+    default=None,
+    help="Path to howlalign.toml policy.",
+)
+@click.option(
+    "--global",
+    "is_global",
+    is_flag=True,
+    default=False,
+    help="Target user global configuration instead of project workspace.",
+)
+@click.option(
+    "--scope",
+    "scope_opt",
+    type=click.Choice(["project", "global", "all"], case_sensitive=False),
+    default=None,
+    help="Explicitly specify target configuration scope.",
+)
+@click.option(
+    "--provider",
+    type=click.Choice(["claude", "codex", "agy", "all"], case_sensitive=False),
+    default="all",
+    help="Filter inspection to a specific provider.",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    default=False,
+    help="Output effective policy details as JSON.",
+)
+def explain_cmd(
+    config_path: str | None,
+    is_global: bool,
+    scope_opt: str | None,
+    provider: str,
+    json_output: bool,
+) -> None:
+    """Inspect and explain resolved effective models, reasoning effort, and permissions."""
+    from howlalign.core.engine import AlignmentEngine
+
+    target_scope = resolve_scope(is_global, scope_opt)
+    try:
+        engine = AlignmentEngine(config_path=config_path, scope=target_scope)
+        exit_code = engine.explain(provider_filter=provider, json_output=json_output)
+        sys.exit(exit_code)
+    except HowlAlignError as err:
+        click.secho(f"Error: {err}", fg="red", err=True)
+        sys.exit(1)
+
+
 @cli.command("diff")
 @click.option(
     "--config",

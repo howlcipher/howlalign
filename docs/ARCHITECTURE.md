@@ -146,3 +146,46 @@ HowlAlign encounters files generated across three historical iterations:
 4. **Fail-Closed Default:**
    - If stored fingerprint is missing, unparseable, or fails both canonical and legacy integrity checks, `has_user_modifications()` returns `True`, preventing data loss.
 
+## 7. Provider-Specific Policy Engine & Centralized Resolver (v0.1.5)
+
+HowlAlign v0.1.5 introduces an independent, decoupled policy architecture that allows Claude Code, OpenAI Codex CLI, and Google Antigravity CLI (AGY) to configure models, reasoning effort, and permission boundaries without cross-provider side effects.
+
+### 1. Architectural Motivation
+Prior to v0.1.5, `RoleConfig` defined a shared `effort` field and shared `PermissionsConfig` (`ask_approval`, `sandbox`). While model names could be configured per provider (`claude_model`, `codex_model`, `agy_model`), reasoning effort was unified: configuring low effort for Codex implementation inadvertently lowered Claude's effort, or configuring high effort for AGY forced high effort on Codex subagents. Similarly, permissions lacked provider scoping.
+
+v0.1.5 solves this by decoupling effort and permissions per provider while preserving full backward compatibility with existing policies.
+
+### 2. Precedence Hierarchies
+
+All resolution logic is centralized directly on `Policy` methods rather than duplicated across adapters, ensuring deterministic, reproducible behavior.
+
+#### A. Reasoning Effort Precedence
+When determining effective reasoning effort for provider `P` in role `R`:
+1. **Explicit Provider-Specific Role Effort:** `roles.<role>.provider_effort.<provider>` (or shortcut `roles.<role>.<provider>_effort`).
+2. **Provider Overrides Table:** `overrides.<provider>.effort`.
+3. **Shared Role Fallback:** `roles.<role>.effort`.
+4. **Built-in Default:** Role-specific established default (`planning="high"`, `implementation="medium"`, `support="low"`).
+
+#### B. Permission Boundary Precedence
+When determining effective permissions for provider `P`:
+1. **Explicit Provider Permission Table:** `permissions.providers.<provider>.*` (`ask_approval`, `sandbox`, `allow_dangerous_bypass`).
+2. **Provider Overrides Table:** `overrides.<provider>.*` (`ask_approval`, `sandbox`).
+3. **Shared Permission Defaults:** `permissions.*` (`ask_approval`, `sandbox`, `allow_dangerous_bypass`).
+4. **Safe Defaults:** `ask_approval = "on-request"`, `sandbox = "workspace-write"`, `allow_dangerous_bypass = False`.
+
+### 3. Centralized Resolution Methods
+The `Policy` domain model exposes typed resolver methods:
+- `get_effective_model(role_name, provider)`: Resolves model name with provider fallback.
+- `get_effective_effort(role_name, provider)`: Resolves effort following the 4-tier precedence hierarchy.
+- `get_effective_effort_with_source(role_name, provider)`: Returns `(EffortLevel, source_string)` for transparent diagnostics and attribution.
+- `get_effective_permissions(provider)`: Resolves typed `EffectivePermissions` with source tracking.
+- `get_effective_provider_policy(provider)`: Aggregates role settings, permissions, and active rules into a typed `EffectiveProviderPolicy`.
+- `get_conflicting_settings(provider)`: Detects ambiguous or contradictory configurations (e.g. conflicting legacy overrides vs explicit provider_effort) and produces non-fatal diagnostics.
+- `detect_permission_escalation(provider, target_file, original_content, proposed_content)`: Evaluates whether proposed configuration changes widen permissions (e.g. enabling `approval_policy = "never"` or `toolPermission = "always-proceed"` from a safer state).
+
+### 4. Security Alerts & Permission Escalation Safeguards
+- **Differ Alerts:** When `Differ` generates unified diffs, it scans for dangerous permission widenings (`never` approval, `danger-full-access` sandbox, `allowNonWorkspaceAccess`, `acceptEdits` mode). If detected, prominent `[SECURITY ALERT]` headers are injected into the diff output.
+- **Doctor Diagnostic Checks:** `Doctor` reports effective permissions for each enabled provider, flags unconstrained execution configurations (`approval_policy = "never"`, `toolPermission = "always-proceed"`), and verifies that dangerous bypasses are explicitly authorized via `allow_dangerous_bypass = true`.
+- **Explain Inspection Command:** `howlalign explain [--provider <name>] [--json]` provides complete visibility into the effective matrix, showing exactly which configuration directive resolved each parameter and its provenance.
+
+

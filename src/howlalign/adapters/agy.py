@@ -29,6 +29,7 @@ from howlalign.core.models import (
     ProviderInfo,
     ProviderType,
     RoleClass,
+    SandboxMode,
 )
 
 
@@ -58,28 +59,28 @@ class AgyAdapter(BaseAdapter):
             except Exception as err:
                 raise ConfigurationParseError(settings_path, "JSON", err) from err
 
-        # Implementation model default
-        impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
-        if impl_role:
-            data["model"] = impl_role.agy_model
-            data["effort"] = impl_role.effort.value
+        # Implementation model and effort resolution via centralized engine
+        data["model"] = policy.get_effective_model(ProviderType.AGY, RoleClass.IMPLEMENTATION)
+        data["effort"] = policy.get_effective_effort(
+            ProviderType.AGY, RoleClass.IMPLEMENTATION
+        ).value
 
-        # Permissions mode
-        if policy.permissions.ask_approval == ApprovalPolicy.NEVER:
+        # Permissions resolution via centralized engine
+        eff_perms = policy.get_effective_permissions(ProviderType.AGY)
+        if eff_perms.ask_approval == ApprovalPolicy.NEVER:
             data["toolPermission"] = "always-proceed"
-        elif policy.permissions.ask_approval == ApprovalPolicy.ALWAYS:
+        elif eff_perms.ask_approval == ApprovalPolicy.ALWAYS:
             data["toolPermission"] = "request-review"
         else:
             data["toolPermission"] = "proceed-in-sandbox"
 
-        # Apply overrides
+        if eff_perms.sandbox == SandboxMode.DANGER_FULL_ACCESS:
+            data["allowNonWorkspaceAccess"] = True
+
+        # Apply mode override if specified
         agy_overrides = policy.overrides.get("agy", {})
         if "mode" in agy_overrides:
             data["mode"] = agy_overrides["mode"]
-        if "toolPermission" in agy_overrides:
-            data["toolPermission"] = agy_overrides["toolPermission"]
-        if "effort" in agy_overrides:
-            data["effort"] = agy_overrides["effort"]
 
         return json.dumps(data, indent=2) + "\n"
 
@@ -243,8 +244,7 @@ model: {model}
                     )
                     continue
 
-            role_cfg = policy.roles.get(agent_cfg.model_role)
-            model_slug = role_cfg.agy_model if role_cfg else "gemini-3.8-flash-high"
+            model_slug = policy.get_effective_model(ProviderType.AGY, agent_cfg.model_role)
 
             proposed_agent = self._generate_agent_markdown(
                 name=agent_name,
@@ -356,6 +356,29 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
                     ),
                     provider="agy",
                     action="Configure specialized planning skills in .agents/skills/ for automated model routing.",
+                )
+            )
+
+        # Check conflicting settings
+        for conflict in policy.get_conflicting_settings(ProviderType.AGY):
+            items.append(
+                DiagnosticItem(
+                    severity="INFO",
+                    category="CONFIGURATION",
+                    message=conflict,
+                    provider="agy",
+                )
+            )
+
+        # Check permission escalation
+        for escalation in policy.detect_permission_escalation(ProviderType.AGY):
+            items.append(
+                DiagnosticItem(
+                    severity="WARNING",
+                    category="SECURITY",
+                    message=escalation,
+                    provider="agy",
+                    action="Review permissions.providers.agy to ensure widening was intended.",
                 )
             )
 

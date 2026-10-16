@@ -62,23 +62,24 @@ class ClaudeAdapter(BaseAdapter):
         if use_opus_plan:
             data["model"] = "opusplan"
         else:
-            impl_role = policy.roles.get(RoleClass.IMPLEMENTATION)
-            if impl_role:
-                data["model"] = impl_role.claude_model
+            data["model"] = policy.get_effective_model(
+                ProviderType.CLAUDE, RoleClass.IMPLEMENTATION
+            )
 
         # 2. Effort settings
         model_settings = data.setdefault("modelSettings", {})
         for role_class in (RoleClass.PLANNING, RoleClass.IMPLEMENTATION, RoleClass.SUPPORT):
-            r_cfg = policy.roles.get(role_class)
-            if r_cfg:
-                m_entry = model_settings.setdefault(r_cfg.claude_model, {})
-                m_entry["effortLevel"] = r_cfg.effort.value
+            model_name = policy.get_effective_model(ProviderType.CLAUDE, role_class)
+            effort = policy.get_effective_effort(ProviderType.CLAUDE, role_class)
+            m_entry = model_settings.setdefault(model_name, {})
+            m_entry["effortLevel"] = effort.value
 
         # 3. Permissions - conservative mapping
+        eff_perms = policy.get_effective_permissions(ProviderType.CLAUDE)
         permissions = data.setdefault("permissions", {})
-        if policy.permissions.ask_approval == ApprovalPolicy.NEVER:
+        if eff_perms.ask_approval == ApprovalPolicy.NEVER:
             permissions["defaultMode"] = "acceptEdits"
-        elif policy.permissions.ask_approval == ApprovalPolicy.ALWAYS:
+        elif eff_perms.ask_approval == ApprovalPolicy.ALWAYS:
             permissions["defaultMode"] = "default"
         else:
             # Default ON_REQUEST maps conservatively to standard "default" (prompts before mutations)
@@ -207,8 +208,7 @@ permissionMode: {permission_mode}
             )
 
             # Dynamic Model Resolution: Support role uses Haiku, Implementation uses Sonnet
-            role_cfg = policy.roles.get(agent_cfg.model_role)
-            model_target = role_cfg.claude_model if role_cfg else "inherit"
+            model_target = policy.get_effective_model(ProviderType.CLAUDE, agent_cfg.model_role)
 
             proposed_agent = self._generate_agent_markdown(
                 name=agent_name,
@@ -291,14 +291,37 @@ This repository is aligned with HowlAlign policy schema v{policy.schema_version}
         )
 
         # Check permissions
-        if policy.permissions.allow_dangerous_bypass:
+        eff_perms = policy.get_effective_permissions(ProviderType.CLAUDE)
+        if eff_perms.allow_dangerous_bypass:
             items.append(
                 DiagnosticItem(
                     severity="WARNING",
                     category="SECURITY",
-                    message="Policy specifies 'allow_dangerous_bypass = true'. Claude Code security policy blocks bypass mode from repository settings.",
+                    message="Effective policy specifies 'allow_dangerous_bypass = true'. Claude Code security policy blocks bypass mode from repository settings.",
                     provider="claude",
                     action="Disable allow_dangerous_bypass in policy or pass flag at runtime.",
+                )
+            )
+
+        # Report conflicting settings and permission escalations
+        for conflict in policy.get_conflicting_settings(ProviderType.CLAUDE):
+            items.append(
+                DiagnosticItem(
+                    severity="INFO",
+                    category="CONFIGURATION",
+                    message=conflict,
+                    provider="claude",
+                )
+            )
+
+        for escalation in policy.detect_permission_escalation(ProviderType.CLAUDE):
+            items.append(
+                DiagnosticItem(
+                    severity="WARNING",
+                    category="SECURITY",
+                    message=escalation,
+                    provider="claude",
+                    action="Review permissions.providers.claude to ensure widening was intended.",
                 )
             )
 

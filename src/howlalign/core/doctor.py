@@ -22,6 +22,7 @@ from howlalign.core.discovery import ProviderDiscovery
 from howlalign.core.models import (
     DiagnosticItem,
     ProviderType,
+    RoleClass,
     SandboxMode,
     Scope,
 )
@@ -153,6 +154,28 @@ class Doctor:
             info = providers_info.get(prov_type)
             adapter = self.adapters.get(prov_type)
             if info and adapter:
+                eff = self.policy.get_effective_provider_policy(prov_type)
+                plan_m = eff.roles[RoleClass.PLANNING].model
+                plan_e = eff.roles[RoleClass.PLANNING].effort.value
+                impl_m = eff.roles[RoleClass.IMPLEMENTATION].model
+                impl_e = eff.roles[RoleClass.IMPLEMENTATION].effort.value
+                supp_m = eff.roles[RoleClass.SUPPORT].model
+                supp_e = eff.roles[RoleClass.SUPPORT].effort.value
+                items.append(
+                    DiagnosticItem(
+                        severity="INFO",
+                        category="CONFIGURATION",
+                        message=(
+                            f"Effective policy for {prov_type.value}: "
+                            f"Planning={plan_m} ({plan_e}), "
+                            f"Implementation={impl_m} ({impl_e}), "
+                            f"Support={supp_m} ({supp_e}), "
+                            f"Approval={eff.permissions.ask_approval.value}, "
+                            f"Sandbox={eff.permissions.sandbox.value}."
+                        ),
+                        provider=prov_type.value,
+                    )
+                )
                 items.extend(adapter.check_health(self.policy, info, is_global=self.is_global))
 
         return items

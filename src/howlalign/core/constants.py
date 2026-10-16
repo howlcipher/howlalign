@@ -9,7 +9,7 @@ from typing import Mapping
 
 # Versioning & Schemas
 DEFAULT_POLICY_VERSION = "0.1.0"
-SUPPORTED_POLICY_VERSIONS = frozenset({"0.1.0"})
+SUPPORTED_POLICY_VERSIONS = frozenset({"0.1.0", "0.1.1", "0.1.5"})
 POLICY_FILENAME = "howlalign.toml"
 HIDDEN_POLICY_FILENAME = ".howlalign.toml"
 MANIFEST_FILENAME = "manifest.json"

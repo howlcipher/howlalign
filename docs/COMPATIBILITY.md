@@ -1,6 +1,6 @@
 # Provider Compatibility Matrix
 
-This document provides a comprehensive capability classification, evaluated versions, runtime validation status, and known behavioral constraints for AI coding assistant providers supported by HowlAlign v0.1.4.
+This document provides a comprehensive capability classification, evaluated versions, runtime validation status, and known behavioral constraints for AI coding assistant providers supported by HowlAlign v0.1.5.
 
 ---
 
@@ -30,10 +30,10 @@ Each native capability is classified under one of four rigorous standards:
 | Capability | Status | Notes |
 | :--- | :--- | :--- |
 | Model selection (`opusplan`, canonical IDs) | **Runtime Verified** | Validated via `settings.json` `"model"` property and CLI execution. |
-| Thinking effort levels (`effortLevel`) | **Schema / Doc Verified** | Set via `"modelSettings.<model>.effortLevel"` (`low`, `medium`, `high`, `xhigh`). |
-| Specialized Subagents (`.claude/agents/*.md`) | **Runtime Verified** | Markdown agent format with YAML frontmatter specifying `name`, `description`, `tools`, and `permissionMode`. |
+| Independent role effort (`provider_effort`) | **Schema / Doc Verified** | Maps planning, implementation, and support roles independently to `"modelSettings.<model>.effortLevel"` (`low`, `medium`, `high`, `xhigh`). |
 | Dynamic mode routing (`opusplan`) | **Schema / Doc Verified** | Uses Opus during Plan Mode and Sonnet during Implementation Mode. |
-| Granular permissions (`allow`, `deny`, `ask`) | **Schema / Doc Verified** | Specified under `"permissions"` key in `settings.json`. |
+| Provider-specific permissions (`permissions.providers.claude`) | **Schema / Doc Verified** | Controls `"defaultMode"` (`acceptEdits` when `never`, else `default`) and granular tool permissions. |
+| Specialized Subagents (`.claude/agents/*.md`) | **Runtime Verified** | Markdown agent format with YAML frontmatter specifying `name`, `description`, `tools`, and `permissionMode`. |
 | Project-level `CLAUDE.md` guidelines | **Runtime Verified** | Automatically loaded into context during session startup. |
 | `bypassPermissionsMode` in repository config | **Unsupported** | Blocked by Claude Code security boundary. Repository-level config cannot bypass permissions. |
 | Interactive prompts in noninteractive mode (`-p`) | **Unsupported** | Silently fails unless `--permission-mode acceptEdits` or `--permission-prompts none` is supplied. |
@@ -56,21 +56,23 @@ Each native capability is classified under one of four rigorous standards:
 | Capability | Status | Notes |
 | :--- | :--- | :--- |
 | Model selection (`gpt-6.1-sol`, `gpt-6-astra`, `o3`) | **Runtime Verified** | Validated via `config.toml` `model = "..."`. |
-| Six-tier reasoning effort (`model_reasoning_effort`) | **Runtime Verified** | Values: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. |
-| Plan mode reasoning effort (`plan_mode_reasoning_effort`) | **Runtime Verified** | Configured in `config.toml`. |
-| Agent role files (`.codex/agents/*.toml`) | **Runtime Verified** | Roles define `description`, `developer_instructions`, `model`, and `model_reasoning_effort`. |
+| Implementation reasoning effort (`model_reasoning_effort`) | **Runtime Verified** | Resolved independently from `roles.implementation.provider_effort.codex`. Values: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. |
+| Plan mode reasoning effort (`plan_mode_reasoning_effort`) | **Runtime Verified** | Resolved independently from `roles.planning.provider_effort.codex` in `config.toml`. |
+| Agent role files (`.codex/agents/*.toml`) | **Runtime Verified** | Subagents resolve their own model and effort independently from support role or specific agent overrides. |
+| Provider-specific permissions (`permissions.providers.codex`) | **Runtime Verified** | Maps `ask_approval` directly to `approval_policy` (`never`, `on-request`, `always`) and `sandbox` to `sandbox_mode` (`danger-full-access`, `workspace-write`, `read-only`). |
 | Project Trust Boundary (`[projects."<path>"]`) | **Runtime Verified** | Project `.codex/config.toml` is ignored unless explicitly trusted in global config (`trust_level = "trusted"`). |
 | Linux Sandbox mode (`sandbox_mode = "workspace-write"`) | **Runtime Verified** | Uses Bubblewrap & Landlock isolation. |
 | Top-level comments provenance (`# managed_by = "howlalign"`) | **Runtime Verified** | Comment-based tagging preserved without corrupting TOML deserializer. |
-| Global `default_subagent_model` in `config.toml` | **Unsupported** | Codex CLI deserializer rejects this in `config.toml` under `--strict-config`. Removed in v0.1.3; subagent models are configured per agent role TOML. |
-| Global `default_subagent_reasoning_effort` in `config.toml` | **Unsupported** | Codex CLI deserializer rejects this in `config.toml` under `--strict-config`. Removed in v0.1.3; subagent effort is configured per agent role TOML. |
-| Data table `managed_by = "howlalign"` in role TOMLs | **Unsupported** | Causes deserializer failure (`unknown field managed_by`). Removed from table data and stored as header comment in v0.1.3. |
+| TOML comment preservation caveat | **Documented Constraint** | Standard python `toml` parser preserves all semantic data keys and tables (`[projects]`, `[features]`) but discards inline human comments on serialization. Doctor inspects existing `config.toml` for comments and emits an informational diagnostic prior to apply. |
+| Global `default_subagent_model` in `config.toml` | **Unsupported** | Codex CLI deserializer rejects this in `config.toml` under `--strict-config`. Subagent models are configured per agent role TOML. |
+| Global `default_subagent_reasoning_effort` in `config.toml` | **Unsupported** | Codex CLI deserializer rejects this in `config.toml` under `--strict-config`. Subagent effort is configured per agent role TOML. |
+| Data table `managed_by = "howlalign"` in role TOMLs | **Unsupported** | Causes deserializer failure (`unknown field managed_by`). Formatted as header comment. |
 
 ---
 
 ## 3. Google Antigravity CLI (AGY)
 
-- **Target Evaluated Version:** `1.3.6`
+- **Target Evaluated Version:** `1.3.6` / `1.4.0`
 - **Installed Status:** Installed (`/home/howlcipher/.local/bin/agy`)
 - **Validation Command:** `agy models`, `agy doctor`, `agy --help`
 - **Configuration Locations:**
@@ -84,27 +86,27 @@ Each native capability is classified under one of four rigorous standards:
 | Capability | Status | Notes |
 | :--- | :--- | :--- |
 | Model discovery (`agy models`) | **Runtime Verified** | Discovers active models directly from CLI registry (`discover_agy_models()`). |
-| Model selection (`gemini-3.8-flash-*`, `claude-*`) | **Runtime Verified** | Verified active model registry via `agy models`. |
-| Thinking effort levels (`effort` / `--effort`) | **Runtime Verified** | Validated via `settings.json` (`low`, `medium`, `high`, `xhigh`, `max`). |
+| Model selection (`Gemini 3.8 Flash (High)`, `claude-*`) | **Runtime Verified** | Preserves exact model strings across planning, implementation, and support roles. |
+| Independent effort levels (`settings.json` `"effort"`) | **Runtime Verified** | Resolved independently from `roles.implementation.provider_effort.agy` (`low`, `medium`, `high`, `xhigh`, `max`). |
+| Provider-specific permissions (`permissions.providers.agy`) | **Runtime Verified** | Maps `ask_approval = "never"` to `toolPermission = "always-proceed"`, `on-request` to `request-review`, and `sandbox = "workspace-write"` to `proceed-in-sandbox`. Configures `allowNonWorkspaceAccess = true` on `danger-full-access`. |
 | Progressive skills (`.agents/skills/<name>/SKILL.md`) | **Runtime Verified** | YAML frontmatter (`name`, `description`) + markdown instructions. Validated via `check_health()`. |
 | Custom subagents (`.agents/agents/<name>/agent.md`) | **Runtime Verified** | YAML frontmatter (`subagent: true`, `model`, `tools`) + instructions. Validated via `check_health()`. |
-| Workspace directory discovery | **Runtime Verified** | Discovers `.agents/skills` and `.agents/agents` in workspace root. |
-| Execution modes (`accept-edits`, `auto`, `plan`) | **Schema / Doc Verified** | Supported via runtime CLI flags and settings. |
 | Rule file size cap (24 KB per file) | **Runtime Verified** | Files over 24,000 bytes are truncated by AGY CLI; enforced by `howlalign doctor`. |
 | Aggregate rules token budget (20,000 tokens) | **Schema / Doc Verified** | Excess rules demoted to file references. |
-| Fabricated `planningModel` in `settings.json` | **Unsupported** | Not recognized by AGY schema. Flagged by `howlalign doctor` and removed. |
+| Fabricated `planningModel` in `settings.json` | **Unsupported** | Not recognized by AGY schema. Flagged by `howlalign doctor` and omitted. |
 
 ---
 
-## Summary of Unsupported Setting Removals & Hardening in v0.1.3 & v0.1.4
+## 4. Summary of Hardening & Architectural Guarantees in v0.1.5
 
-1. **Codex CLI `default_subagent_*` keys in `config.toml`**:
-   Removed from `src/howlalign/adapters/codex.py`. Codex CLI 0.162.1 config parser emits strict configuration warnings for `default_subagent_model` and `default_subagent_reasoning_effort`. Subagent models and reasoning efforts are set within each specific `.codex/agents/<name>.toml`.
-2. **Codex CLI `managed_by` key in agent role TOML data tables**:
-   Codex deserializes agent role files directly into an internal Rust struct with `deny_unknown_fields`. Emitting `managed_by = "howlalign"` inside the TOML data table caused Codex to log `Ignoring malformed agent role definition: failed to deserialize agent role file ... unknown field managed_by`. HowlAlign formats provenance and fingerprint metadata as top-level comments (`# managed_by = "howlalign"`, `# howlalign: fingerprint = ...`).
-3. **AGY `planningModel` in `settings.json`**:
-   AGY only parses `"model"` and `"effort"` from `settings.json`.
-4. **AGY Model Discovery and Frontmatter Validation in v0.1.4**:
-   `howlalign.core.discovery.discover_agy_models()` actively queries the live AGY model registry. `AgyAdapter.check_health()` validates frontmatter structure and mandatory fields (`name`, `description`, `model`) for all workspace skills and agents.
-5. **Whitespace Preservation in Managed-File Provenance in v0.1.4**:
-   `compute_managed_fingerprint()` hashes exact canonical document bytes (excluding self-referential header tags), preventing invisible whitespace or indentation alterations. Legacy files are migrated with strict whitespace anomaly checks.
+1. **Independent Reasoning Effort per Provider & Role**:
+   HowlAlign v0.1.5 resolves reasoning effort independently for each provider and role via `[roles.<role>.provider_effort]`. Changing Codex implementation effort to `low` does not alter Claude's or AGY's effort levels.
+2. **Independent Security & Autonomy Boundaries**:
+   `[permissions.providers.<provider>]` allows granular, provider-scoped autonomy (e.g. `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` on Codex for unrestricted local development) while preserving conservative defaults on other providers.
+3. **Permission Escalation Safeguards**:
+   `Differ` scans proposed configurations and injects high-visibility `[SECURITY ALERT]` notices if an edit widens permissions or removes sandbox constraints. `Doctor` warns when dangerous bypasses are configured.
+4. **Transparent Inspection (`howlalign explain`)**:
+   Operators can audit the fully resolved effective configuration matrix and source attribution for every setting before applying changes.
+5. **Codex TOML Comment Awareness**:
+   Doctor detects human comments in `~/.codex/config.toml` and emits informational notices explaining serialization behavior.
+

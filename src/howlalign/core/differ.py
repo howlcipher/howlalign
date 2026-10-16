@@ -181,7 +181,56 @@ class Differ:
                     f"# Target: {change.file_path} [{change.provider.value}]\n{chunk}"
                 )
 
+        # Scan for permission widening / escalations
+        security_alerts: list[str] = []
+        for change in changes:
+            if change.is_user_owned_conflict or change.original_content == change.proposed_content:
+                continue
+            orig = change.original_content or ""
+            prop = change.proposed_content
+
+            if re.search(
+                r'["\']?approval_policy["\']?\s*[:=]\s*["\']never["\']', prop, re.I
+            ) and not re.search(
+                r'["\']?approval_policy["\']?\s*[:=]\s*["\']never["\']', orig, re.I
+            ):
+                security_alerts.append(
+                    f"[SECURITY ALERT] Permission widening: 'approval_policy' set to 'never' in {change.file_path.name} ({change.provider.value})"
+                )
+            if re.search(
+                r'["\']?toolPermission["\']?\s*[:=]\s*["\']always-proceed["\']', prop, re.I
+            ) and not re.search(
+                r'["\']?toolPermission["\']?\s*[:=]\s*["\']always-proceed["\']', orig, re.I
+            ):
+                security_alerts.append(
+                    f"[SECURITY ALERT] Permission widening: 'toolPermission' set to 'always-proceed' in {change.file_path.name} ({change.provider.value})"
+                )
+            if re.search(
+                r'["\']?sandbox_mode["\']?\s*[:=]\s*["\']danger-full-access["\']', prop, re.I
+            ) and not re.search(
+                r'["\']?sandbox_mode["\']?\s*[:=]\s*["\']danger-full-access["\']', orig, re.I
+            ):
+                security_alerts.append(
+                    f"[SECURITY ALERT] Permission widening: 'sandbox_mode' set to 'danger-full-access' in {change.file_path.name} ({change.provider.value})"
+                )
+            if re.search(
+                r'["\']?allowNonWorkspaceAccess["\']?\s*[:=]\s*true', prop, re.I
+            ) and not re.search(r'["\']?allowNonWorkspaceAccess["\']?\s*[:=]\s*true', orig, re.I):
+                security_alerts.append(
+                    f"[SECURITY ALERT] Permission widening: 'allowNonWorkspaceAccess' set to true in {change.file_path.name} ({change.provider.value})"
+                )
+            if re.search(
+                r'["\']?defaultMode["\']?\s*[:=]\s*["\']acceptEdits["\']', prop, re.I
+            ) and not re.search(
+                r'["\']?defaultMode["\']?\s*[:=]\s*["\']acceptEdits["\']', orig, re.I
+            ):
+                security_alerts.append(
+                    f"[SECURITY ALERT] Autonomous edits enabled: 'defaultMode' set to 'acceptEdits' in {change.file_path.name} ({change.provider.value})"
+                )
+
         summary = f"{changed_count} file(s) to align ({created_count} new, {changed_count - created_count} modified)."
+        if security_alerts:
+            summary += "\n" + "\n".join(f"  {alert}" for alert in security_alerts)
         if has_conflicts:
             summary += (
                 "\n  [WARNING] User-authored agent files detected and protected from overwrite."

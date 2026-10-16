@@ -23,6 +23,7 @@ from howlalign.core.models import (
     EffortLevel,
     PermissionsConfig,
     Policy,
+    ProviderPermissionsConfig,
     ProviderType,
     RoleClass,
     RoleConfig,
@@ -165,6 +166,12 @@ def serialize_policy_toml(policy: Policy) -> str:
             lines.append(f'codex_model = "{rc.codex_model}"')
             lines.append(f'agy_model = "{rc.agy_model}"')
             lines.append(f'effort = "{rc.effort.value}"')
+            if rc.provider_effort:
+                lines.append("")
+                lines.append(f"[roles.{role_name.value}.provider_effort]")
+                for prov in (ProviderType.CLAUDE, ProviderType.CODEX, ProviderType.AGY):
+                    if prov in rc.provider_effort:
+                        lines.append(f'{prov.value} = "{rc.provider_effort[prov].value}"')
             lines.append("")
 
     lines.append("# Specialized Agent Definitions")
@@ -187,6 +194,21 @@ def serialize_policy_toml(policy: Policy) -> str:
     )
     lines.append(f'ask_approval = "{policy.permissions.ask_approval.value}"')
     lines.append(f'sandbox = "{policy.permissions.sandbox.value}"')
+
+    if policy.permissions.providers:
+        for prov in (ProviderType.CLAUDE, ProviderType.CODEX, ProviderType.AGY):
+            if prov in policy.permissions.providers:
+                pp = policy.permissions.providers[prov]
+                lines.append("")
+                lines.append(f"[permissions.providers.{prov.value}]")
+                if pp.allow_dangerous_bypass is not None:
+                    lines.append(
+                        f"allow_dangerous_bypass = {'true' if pp.allow_dangerous_bypass else 'false'}"
+                    )
+                if pp.ask_approval is not None:
+                    lines.append(f'ask_approval = "{pp.ask_approval.value}"')
+                if pp.sandbox is not None:
+                    lines.append(f'sandbox = "{pp.sandbox.value}"')
     lines.append("")
 
     lines.append("# Provider Specific Overrides")
@@ -265,12 +287,64 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
         else:
             effort = EffortLevel.MEDIUM
 
+        prov_effort: dict[ProviderType, EffortLevel] = {}
+        if "provider_effort" in r_data:
+            pe_data = r_data["provider_effort"]
+            if not isinstance(pe_data, dict):
+                raise PolicyValidationError(
+                    f"Invalid type for roles.{role_key}.provider_effort: expected table, got {type(pe_data).__name__}"
+                )
+            for p_key, p_eff in pe_data.items():
+                if not isinstance(p_key, str):
+                    raise PolicyValidationError(
+                        f"Invalid provider key in roles.{role_key}.provider_effort: expected string, got {type(p_key).__name__}"
+                    )
+                try:
+                    p_enum = ProviderType(p_key.lower())
+                except ValueError:
+                    valid_provs = [x.value for x in ProviderType]
+                    raise PolicyValidationError(
+                        f"Unknown provider '{p_key}' in roles.{role_key}.provider_effort. Valid options: {valid_provs}"
+                    )
+                if not isinstance(p_eff, str):
+                    raise PolicyValidationError(
+                        f"Invalid type for roles.{role_key}.provider_effort.{p_key}: expected string, got {type(p_eff).__name__}"
+                    )
+                try:
+                    prov_effort[p_enum] = EffortLevel(p_eff.lower())
+                except ValueError:
+                    valid_efforts = [x.value for x in EffortLevel]
+                    raise PolicyValidationError(
+                        f"Invalid effort '{p_eff}' for provider '{p_key}' in role '{role_key}'. Valid options: {valid_efforts}"
+                    )
+
+        # Also support direct claude_effort, codex_effort, agy_effort if provided
+        for p_type, attr_name in (
+            (ProviderType.CLAUDE, "claude_effort"),
+            (ProviderType.CODEX, "codex_effort"),
+            (ProviderType.AGY, "agy_effort"),
+        ):
+            if attr_name in r_data and p_type not in prov_effort:
+                raw_eff = r_data[attr_name]
+                if not isinstance(raw_eff, str):
+                    raise PolicyValidationError(
+                        f"Invalid type for roles.{role_key}.{attr_name}: expected string, got {type(raw_eff).__name__}"
+                    )
+                try:
+                    prov_effort[p_type] = EffortLevel(raw_eff.lower())
+                except ValueError:
+                    valid_efforts = [x.value for x in EffortLevel]
+                    raise PolicyValidationError(
+                        f"Invalid effort '{raw_eff}' for roles.{role_key}.{attr_name}. Valid options: {valid_efforts}"
+                    )
+
         roles[rc_enum] = RoleConfig(
             claude_model=r_data.get("claude_model", "claude-sonnet-5"),
             codex_model=r_data.get("codex_model", "gpt-6.1-sol"),
             agy_model=r_data.get("agy_model", "gemini-3.8-flash-high"),
             effort=effort,
             description=r_data.get("description", ""),
+            provider_effort=prov_effort,
         )
 
     # Agents
@@ -368,10 +442,80 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
             f"Invalid type for permissions.allow_dangerous_bypass: expected boolean, got {type(perm_sec['allow_dangerous_bypass']).__name__}"
         )
 
+    prov_perms_map: dict[ProviderType, ProviderPermissionsConfig] = {}
+    if "providers" in perm_sec:
+        raw_providers = perm_sec["providers"]
+        if not isinstance(raw_providers, dict):
+            raise PolicyValidationError(
+                f"Invalid [permissions.providers] section: expected table, got {type(raw_providers).__name__}"
+            )
+        for p_key, p_data in raw_providers.items():
+            if not isinstance(p_key, str):
+                raise PolicyValidationError(
+                    f"Invalid provider entry in permissions.providers: expected string, got {type(p_key).__name__}"
+                )
+            try:
+                p_enum = ProviderType(p_key.lower())
+            except ValueError:
+                valid_provs = [x.value for x in ProviderType]
+                raise PolicyValidationError(
+                    f"Unknown provider '{p_key}' in permissions.providers. Valid options: {valid_provs}"
+                )
+            if not isinstance(p_data, dict):
+                raise PolicyValidationError(
+                    f"Invalid configuration for permissions.providers.{p_key}: expected table, got {type(p_data).__name__}"
+                )
+
+            p_ask_app: ApprovalPolicy | None = None
+            if "ask_approval" in p_data:
+                raw_val = p_data["ask_approval"]
+                if not isinstance(raw_val, str):
+                    raise PolicyValidationError(
+                        f"Invalid type for permissions.providers.{p_key}.ask_approval: expected string, got {type(raw_val).__name__}"
+                    )
+                try:
+                    p_ask_app = ApprovalPolicy(raw_val.lower())
+                except ValueError:
+                    valid_policies = [x.value for x in ApprovalPolicy]
+                    raise PolicyValidationError(
+                        f"Invalid permissions.providers.{p_key}.ask_approval '{raw_val}'. Valid options: {valid_policies}"
+                    )
+
+            p_sbox: SandboxMode | None = None
+            if "sandbox" in p_data:
+                raw_val = p_data["sandbox"]
+                if not isinstance(raw_val, str):
+                    raise PolicyValidationError(
+                        f"Invalid type for permissions.providers.{p_key}.sandbox: expected string, got {type(raw_val).__name__}"
+                    )
+                try:
+                    p_sbox = SandboxMode(raw_val.lower())
+                except ValueError:
+                    valid_sandboxes = [x.value for x in SandboxMode]
+                    raise PolicyValidationError(
+                        f"Invalid permissions.providers.{p_key}.sandbox '{raw_val}'. Valid options: {valid_sandboxes}"
+                    )
+
+            p_bypass: bool | None = None
+            if "allow_dangerous_bypass" in p_data:
+                raw_val = p_data["allow_dangerous_bypass"]
+                if not isinstance(raw_val, bool):
+                    raise PolicyValidationError(
+                        f"Invalid type for permissions.providers.{p_key}.allow_dangerous_bypass: expected boolean, got {type(raw_val).__name__}"
+                    )
+                p_bypass = raw_val
+
+            prov_perms_map[p_enum] = ProviderPermissionsConfig(
+                ask_approval=p_ask_app,
+                sandbox=p_sbox,
+                allow_dangerous_bypass=p_bypass,
+            )
+
     permissions = PermissionsConfig(
         allow_dangerous_bypass=bool(perm_sec.get("allow_dangerous_bypass", False)),
         ask_approval=ask_app,
         sandbox=sbox,
+        providers=prov_perms_map,
     )
 
     overrides = data.get("overrides", {})
