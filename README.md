@@ -203,7 +203,7 @@ HowlAlign operates under strict configuration safety rules:
 - **Secret Isolation & Masking:** Sensitive credentials, private keys, tokens, and authorization headers are masked in all diff previews and diagnostics without double-redaction or leaking prefixes.
 - **Zero Unrelated Overwrite:** Preserves existing unrelated settings and tables in JSON and TOML configuration files.
 - **No Silent Permission Bypasses:** Never enables `--dangerously-skip-permissions` or unrestricted sandbox bypasses without explicit user policy intent.
-- **Hermetic Testing & Deployment Runbook:** Test suites run under hermetic fixtures isolating all environment variables and filesystem operations. Controlled evaluation on real developer machines is guided by [`docs/DEPLOYMENT_RUNBOOK.md`](file:///run/media/system/tallgeese/dev/howlalign/docs/DEPLOYMENT_RUNBOOK.md).
+- **Hermetic Testing & Deployment Runbook:** Test suites run under hermetic fixtures isolating all environment variables and filesystem operations. Controlled evaluation on real developer machines is guided by [`docs/DEPLOYMENT_RUNBOOK.md`](docs/DEPLOYMENT_RUNBOOK.md).
 
 ---
 
@@ -215,6 +215,13 @@ HowlAlign is standalone-first and does not require HowlPlane, HowlForge, or othe
 - **HowlForge:** Workforce roles and runtime selection contracts.
 - **Howl Provider Core:** Controlled inference transport and execution metadata.
 - **HowlAlign:** Native coding assistant configuration and policy alignment.
+
+HowlAlign talks to no other component at run time. One file is shared: the
+project-level `AGENTS.md` HowlAlign writes for Codex and Antigravity is also a
+continuity file HowlRelay reads (`howlrelay status|handoff|brief`), so the
+instructions HowlAlign renders there become part of the work state HowlRelay
+reports. Keep project facts that HowlRelay should see in `HANDOFF.md` or
+`PROJECT_STATE.md` rather than in the managed block of `AGENTS.md`.
 
 ---
 
