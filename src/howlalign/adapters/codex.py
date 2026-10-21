@@ -273,16 +273,18 @@ Repository engineering conventions aligned via HowlAlign (policy v{policy.schema
                     action="Install Codex CLI or configure environment.",
                 )
             )
-            return items
-
-        items.append(
-            DiagnosticItem(
-                severity="INFO",
-                category="VERSION",
-                message=f"Codex CLI detected at {info.executable_path} (version: {info.version or 'unknown'}).",
-                provider="codex",
+        else:
+            items.append(
+                DiagnosticItem(
+                    severity="INFO",
+                    category="VERSION",
+                    message=f"Codex CLI detected at {info.executable_path} (version: {info.version or 'unknown'}).",
+                    provider="codex",
+                )
             )
-        )
+
+        # Config files are checked whether or not the CLI is installed: a
+        # broken or stale config.toml is wrong either way.
 
         # Check existing config syntax validity
         cfg_path = self._get_target_config_path(is_global)

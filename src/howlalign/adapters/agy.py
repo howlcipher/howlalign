@@ -312,9 +312,7 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
                     action="Install AGY CLI or configure PATH.",
                 )
             )
-            return items
-
-        if info is not None:
+        elif info is not None:
             items.append(
                 DiagnosticItem(
                     severity="INFO",
@@ -324,6 +322,7 @@ This workspace is aligned to HowlAlign policy schema v{policy.schema_version}.
                 )
             )
 
+        # Settings are validated whether or not the CLI is installed.
         # Validate syntax of existing settings.json
         settings_path = self._get_global_settings_path()
         if settings_path.is_file():

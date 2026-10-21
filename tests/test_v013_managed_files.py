@@ -741,3 +741,29 @@ def test_provider_compatibility_native_clis(tmp_path: Path):
         )
         assert res.returncode == 0
         assert "gemini-3.8-flash" in res.stdout
+
+
+def test_doctor_checks_config_files_without_the_cli_installed(tmp_path: Path, monkeypatch):
+    """A stale config.toml is reported even on a machine without the Codex CLI (CI, a fresh clone)."""
+    from howlalign.core.doctor import Doctor
+
+    workspace = tmp_path / "ws"
+    home = tmp_path / "home"
+    workspace.mkdir()
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
+    monkeypatch.setenv("HOWLALIGN_BACKUP_DIR", str(tmp_path / "backups"))
+
+    policy_path = init_policy_file(path=workspace, is_global=False)
+    (workspace / ".codex").mkdir()
+    (workspace / ".codex" / "config.toml").write_text(
+        'default_subagent_model = "obsolete"\n', encoding="utf-8"
+    )
+
+    items = Doctor(
+        config_path=policy_path, workspace_dir=workspace, home_dir=home, scope=Scope.PROJECT
+    ).run_diagnostics()
+    assert any("is not found on PATH" in item.message for item in items)
+    assert any("obsolete subagent settings" in item.message for item in items)

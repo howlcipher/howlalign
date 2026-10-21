@@ -279,16 +279,17 @@ This repository is aligned with HowlAlign policy schema v{policy.schema_version}
                     action="Install Claude Code via npm or your package manager.",
                 )
             )
-            return items
-
-        items.append(
-            DiagnosticItem(
-                severity="INFO",
-                category="VERSION",
-                message=f"Claude Code detected at {info.executable_path} (version: {info.version or 'unknown'}).",
-                provider="claude",
+        else:
+            items.append(
+                DiagnosticItem(
+                    severity="INFO",
+                    category="VERSION",
+                    message=f"Claude Code detected at {info.executable_path} (version: {info.version or 'unknown'}).",
+                    provider="claude",
+                )
             )
-        )
+
+        # Policy and settings are checked whether or not the CLI is installed.
 
         # Check permissions
         eff_perms = policy.get_effective_permissions(ProviderType.CLAUDE)
