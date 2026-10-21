@@ -15,7 +15,7 @@ Install HowlAlign in a clean, dedicated Python virtual environment to avoid inte
 
 ```bash
 # Navigate to the repository workspace
-cd /run/media/system/tallgeese/dev/howlalign
+cd /path/to/howlalign
 
 # Create and activate an isolated virtual environment (Python 3.11+)
 python3 -m venv .venv-eval

@@ -654,10 +654,10 @@ multi_turn = true
 [notice]
 hide_update_login = true
 
-[projects."/run/media/system/tallgeese/dev/howlalign"]
+[projects."/home/dev/projects/howlalign"]
 trust_level = "trusted"
 
-[projects."/run/media/system/tallgeese/dev/other-project"]
+[projects."/home/dev/projects/other-project"]
 trust_level = "trusted"
 """
     cfg_file.write_text(complex_existing, encoding="utf-8")
@@ -673,13 +673,8 @@ trust_level = "trusted"
     assert parsed["features"]["fast_apply"] is True
     assert parsed["features"]["multi_turn"] is True
     assert parsed["notice"]["hide_update_login"] is True
-    assert (
-        parsed["projects"]["/run/media/system/tallgeese/dev/howlalign"]["trust_level"] == "trusted"
-    )
-    assert (
-        parsed["projects"]["/run/media/system/tallgeese/dev/other-project"]["trust_level"]
-        == "trusted"
-    )
+    assert parsed["projects"]["/home/dev/projects/howlalign"]["trust_level"] == "trusted"
+    assert parsed["projects"]["/home/dev/projects/other-project"]["trust_level"] == "trusted"
     # Managed keys updated
     assert parsed["model"] == "gpt-6.1-sol"
     assert parsed["model_reasoning_effort"] == "low"

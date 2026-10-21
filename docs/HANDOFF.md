@@ -10,7 +10,7 @@ Build, harden, verify, and maintain **HowlAlign**, an open-source, provider-agno
 
 ### Milestone Status: v0.1.5 Provider-Specific Policy Engine & Independence Verified
 - **Repository**: `https://github.com/howlcipher/howlalign`
-- **Local Path**: `/run/media/system/tallgeese/dev/howlalign`
+- **Local Path**: your local checkout of the repository
 - **Current Branch**: `main`
 - **Version**: `0.1.5` (bumped in `pyproject.toml`, `src/howlalign/__init__.py`, and `src/howlalign/core/constants.py`)
 - **Verification Status**: 111/111 unit and integration tests passing; ruff format and lint clean; package build clean.
