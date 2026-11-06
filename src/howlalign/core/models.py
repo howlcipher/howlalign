@@ -7,6 +7,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from howlalign.core.exceptions import ModelResolutionError
+
 
 class ProviderType(str, Enum):
     CLAUDE = "claude"
@@ -160,9 +162,32 @@ class Policy:
     agents: dict[str, AgentConfig] = field(default_factory=dict)
     permissions: PermissionsConfig = field(default_factory=PermissionsConfig)
     overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
+    catalog_home: Path | None = field(default=None, repr=False, compare=False)
+    _model_catalog: dict[ProviderType, list[str]] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
 
     def get_effective_model(self, provider: ProviderType | str, role: RoleClass | str) -> str:
-        """Resolve effective model for a provider and role with safe fallbacks."""
+        """Resolve a provider and role to the exact model to write.
+
+        A ``latest:<family>`` selector resolves against the provider's live model
+        list and raises ModelResolutionError if nothing matches.
+        """
+        from howlalign.core import model_selectors
+
+        if isinstance(provider, str):
+            provider = ProviderType(provider)
+        configured = self._get_configured_model(provider, role)
+        if not model_selectors.is_latest_selector(configured):
+            return configured
+
+        if provider not in self._model_catalog:
+            home = self.catalog_home or Path.home()
+            self._model_catalog[provider] = model_selectors.discover_models(provider, home)
+        return model_selectors.resolve_latest(provider, configured, self._model_catalog[provider])
+
+    def _get_configured_model(self, provider: ProviderType | str, role: RoleClass | str) -> str:
+        """Return the model value as configured, with safe fallbacks."""
         if isinstance(provider, str):
             provider = ProviderType(provider)
         if isinstance(role, str):
@@ -334,7 +359,11 @@ class Policy:
 
         roles_map: dict[RoleClass, EffectiveRoleSettings] = {}
         for role in (RoleClass.PLANNING, RoleClass.IMPLEMENTATION, RoleClass.SUPPORT):
-            model = self.get_effective_model(provider, role)
+            try:
+                model = self.get_effective_model(provider, role)
+            except ModelResolutionError:
+                # Reports still describe a provider whose models cannot be listed.
+                model = self._get_configured_model(provider, role)
             effort, effort_src = self.get_effective_effort_with_source(provider, role)
             roles_map[role] = EffectiveRoleSettings(
                 role=role,

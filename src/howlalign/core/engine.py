@@ -15,6 +15,7 @@ from howlalign.adapters.claude import ClaudeAdapter
 from howlalign.adapters.codex import CodexAdapter
 from howlalign.core.differ import Differ
 from howlalign.core.discovery import ProviderDiscovery
+from howlalign.core.exceptions import ModelResolutionError
 from howlalign.core.models import (
     ApplyResult,
     ConfigChange,
@@ -54,6 +55,7 @@ class AlignmentEngine:
         else:
             self.policy_path = None
             self.policy = get_default_policy()
+        self.policy.catalog_home = self.home
 
         self.discovery = ProviderDiscovery(home_dir=self.home, workspace_dir=self.workspace)
         self.writer = ConfigWriter(
@@ -98,7 +100,17 @@ class AlignmentEngine:
 
                 adapter = self.adapters.get(prov_type)
                 if adapter:
-                    changes.extend(adapter.generate_changes(self.policy, is_global=flag))
+                    try:
+                        changes.extend(adapter.generate_changes(self.policy, is_global=flag))
+                    except ModelResolutionError as err:
+                        info = self.get_providers_info().get(prov_type)
+                        if info and info.installed:
+                            raise
+                        click.secho(
+                            f"Skipping {prov_type.value}: its CLI is not installed. {err}",
+                            fg="yellow",
+                            err=True,
+                        )
 
         return changes
 

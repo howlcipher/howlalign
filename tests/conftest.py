@@ -4,6 +4,12 @@ from pathlib import Path
 
 import pytest
 
+# Stands in for each CLI's live model list, so defaults resolve the same on any machine.
+TEST_MODEL_CATALOG = {
+    "codex": ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna"],
+    "agy": ["gemini-3.8-flash-high", "gemini-3.8-flash-medium", "claude-sonnet-4-6"],
+}
+
 
 @pytest.fixture(autouse=True)
 def hermetic_test_environment(tmp_path_factory, monkeypatch):
@@ -24,3 +30,7 @@ def hermetic_test_environment(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(test_state))
     monkeypatch.setenv("HOWLALIGN_BACKUP_DIR", str(test_backups))
     monkeypatch.setattr(Path, "home", lambda: test_home)
+    monkeypatch.setattr(
+        "howlalign.core.model_selectors.discover_models",
+        lambda provider, home: list(TEST_MODEL_CATALOG.get(provider.value, [])),
+    )
