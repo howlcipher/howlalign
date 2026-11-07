@@ -36,6 +36,12 @@ class PolicySyntaxError(ConfigurationError, ValueError):
     pass
 
 
+class ModelResolutionError(ConfigurationError, ValueError):
+    """Raised when a ``latest:<family>`` model selector cannot be resolved."""
+
+    pass
+
+
 class ConfigurationParseError(ConfigurationError, ValueError):
     """Raised when an existing assistant configuration file cannot be parsed safely."""
 

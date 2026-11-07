@@ -73,6 +73,7 @@ class Doctor:
         else:
             self.policy = get_default_policy()
             self.policy_error = None
+        self.policy.catalog_home = self.home
 
         self.discovery = ProviderDiscovery(home_dir=self.home, workspace_dir=self.workspace)
         self.adapters: dict[ProviderType, BaseAdapter] = {

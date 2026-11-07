@@ -68,23 +68,23 @@ def get_default_policy() -> Policy:
     """Construct standard default policy for HowlAlign."""
     roles = {
         RoleClass.PLANNING: RoleConfig(
-            claude_model="claude-opus-5",
-            codex_model="gpt-6.1-sol",
-            agy_model="gemini-3.8-flash-high",
+            claude_model="latest:opus",
+            codex_model="latest:sol",
+            agy_model="latest:flash-high",
             effort=EffortLevel.HIGH,
             description="System architecture, complex refactoring, high-level planning, and security-critical design",
         ),
         RoleClass.IMPLEMENTATION: RoleConfig(
-            claude_model="claude-sonnet-5",
-            codex_model="gpt-6.1-sol",
-            agy_model="gemini-3.8-flash-high",
+            claude_model="latest:sonnet",
+            codex_model="latest:sol",
+            agy_model="latest:flash-high",
             effort=EffortLevel.MEDIUM,
             description="Active feature implementation, bug fixes, refactoring, and test writing",
         ),
         RoleClass.SUPPORT: RoleConfig(
-            claude_model="claude-haiku-4",
-            codex_model="gpt-5.6-luna",
-            agy_model="gemini-3.8-flash-medium",
+            claude_model="latest:haiku",
+            codex_model="latest:luna",
+            agy_model="latest:flash-medium",
             effort=EffortLevel.LOW,
             description="Lightweight support tasks, symbol search, documentation, and diagnostics",
         ),
@@ -339,9 +339,9 @@ def load_policy_from_dict(data: dict[str, Any]) -> Policy:
                     )
 
         roles[rc_enum] = RoleConfig(
-            claude_model=r_data.get("claude_model", "claude-sonnet-5"),
-            codex_model=r_data.get("codex_model", "gpt-6.1-sol"),
-            agy_model=r_data.get("agy_model", "gemini-3.8-flash-high"),
+            claude_model=r_data.get("claude_model", "latest:sonnet"),
+            codex_model=r_data.get("codex_model", "latest:sol"),
+            agy_model=r_data.get("agy_model", "latest:flash-high"),
             effort=effort,
             description=r_data.get("description", ""),
             provider_effort=prov_effort,

@@ -128,6 +128,10 @@ howlalign doctor --scope all
 
 HowlAlign v0.1.5 enables fine-grained, independent control of reasoning effort and permission boundaries across providers without cross-provider coupling:
 
+Each model value can be an exact ID or a `latest:<family>` selector, which tracks the newest release in that family: `latest:opus`, `latest:sonnet`, or `latest:haiku` for Claude; `latest:sol`, `latest:terra`, or `latest:luna` for Codex; `latest:flash-high` or `latest:flash-medium` for AGY. `howlalign init` writes selectors by default.
+
+Codex and AGY selectors resolve against the CLI's live model list (`~/.codex/models_cache.json`, `agy models`) and the exact ID is written, so `howlalign check` reports drift when a newer model appears. Claude selectors write Claude Code's own alias, which it resolves itself. If an installed CLI offers no match, HowlAlign stops with an error and does not substitute another model.
+
 ```toml
 schema_version = "0.1.5"
 

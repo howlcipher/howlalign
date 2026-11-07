@@ -29,6 +29,7 @@ Each native capability is classified under one of four rigorous standards:
 
 | Capability | Status | Notes |
 | :--- | :--- | :--- |
+| Model aliases from `latest:opus`, `latest:sonnet`, `latest:haiku` | **Not Runtime Verified** | Written as `opus`, `sonnet`, or `haiku`. Whether `modelSettings.<alias>.effortLevel` applies has not been checked. |
 | Model selection (`opusplan`, canonical IDs) | **Runtime Verified** | Validated via `settings.json` `"model"` property and CLI execution. |
 | Independent role effort (`provider_effort`) | **Schema / Doc Verified** | Maps planning, implementation, and support roles independently to `"modelSettings.<model>.effortLevel"` (`low`, `medium`, `high`, `xhigh`). |
 | Dynamic mode routing (`opusplan`) | **Schema / Doc Verified** | Uses Opus during Plan Mode and Sonnet during Implementation Mode. |
@@ -55,6 +56,7 @@ Each native capability is classified under one of four rigorous standards:
 
 | Capability | Status | Notes |
 | :--- | :--- | :--- |
+| Model discovery for `latest:<family>` | **Runtime Verified** | Reads user-visible models from `~/.codex/models_cache.json`, which the Codex CLI maintains. |
 | Model selection (`gpt-6.1-sol`, `gpt-6-astra`, `o3`) | **Runtime Verified** | Validated via `config.toml` `model = "..."`. |
 | Implementation reasoning effort (`model_reasoning_effort`) | **Runtime Verified** | Resolved independently from `roles.implementation.provider_effort.codex`. Values: `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. |
 | Plan mode reasoning effort (`plan_mode_reasoning_effort`) | **Runtime Verified** | Resolved independently from `roles.planning.provider_effort.codex` in `config.toml`. |
@@ -86,6 +88,7 @@ Each native capability is classified under one of four rigorous standards:
 | Capability | Status | Notes |
 | :--- | :--- | :--- |
 | Model discovery (`agy models`) | **Runtime Verified** | Discovers active models directly from CLI registry (`discover_agy_models()`). |
+| `latest:<family>` selectors | **Runtime Verified** | Resolve against `gemini-<version>-<family>` IDs from `agy models`. Claude models offered through AGY need an exact ID. |
 | Model selection (`Gemini 3.8 Flash (High)`, `claude-*`) | **Runtime Verified** | Preserves exact model strings across planning, implementation, and support roles. |
 | Independent effort levels (`settings.json` `"effort"`) | **Runtime Verified** | Resolved independently from `roles.implementation.provider_effort.agy` (`low`, `medium`, `high`, `xhigh`, `max`). |
 | Provider-specific permissions (`permissions.providers.agy`) | **Runtime Verified** | Maps `ask_approval = "never"` to `toolPermission = "always-proceed"`, `on-request` to `request-review`, and `sandbox = "workspace-write"` to `proceed-in-sandbox`. Configures `allowNonWorkspaceAccess = true` on `danger-full-access`. |

@@ -493,7 +493,7 @@ def test_complete_alignment_lifecycle_project_scope(tmp_path: Path, monkeypatch)
     # 7. policy changes: update howlalign.toml policy and re-align
     policy_text = policy_path.read_text(encoding="utf-8")
     updated_policy_text = policy_text.replace(
-        'claude_model = "claude-haiku-4"', 'claude_model = "claude-3-5-haiku-latest"'
+        'claude_model = "latest:haiku"', 'claude_model = "claude-3-5-haiku-latest"'
     )
     policy_path.write_text(updated_policy_text, encoding="utf-8")
 

@@ -41,23 +41,23 @@ DEFAULT_MODELS = MappingProxyType(
     {
         "claude": MappingProxyType(
             {
-                "planning": "claude-opus-5",
-                "implementation": "claude-sonnet-5",
-                "support": "claude-haiku-4",
+                "planning": "latest:opus",
+                "implementation": "latest:sonnet",
+                "support": "latest:haiku",
             }
         ),
         "codex": MappingProxyType(
             {
-                "planning": "gpt-6.1-sol",
-                "implementation": "gpt-6.1-sol",
-                "support": "gpt-5.6-luna",
+                "planning": "latest:sol",
+                "implementation": "latest:sol",
+                "support": "latest:luna",
             }
         ),
         "agy": MappingProxyType(
             {
-                "planning": "gemini-3.8-flash-high",
-                "implementation": "gemini-3.8-flash-high",
-                "support": "gemini-3.8-flash-medium",
+                "planning": "latest:flash-high",
+                "implementation": "latest:flash-high",
+                "support": "latest:flash-medium",
             }
         ),
     }
